@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>彩蛋演示页面</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family: system-ui, sans-serif; background: #f5f5f5; min-height: 100vh; display: flex; flex-direction: column; }
+  header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 24px; text-align: center; }
+  header h1 { font-size: 1.5rem; margin-bottom: 8px; }
+  .container { max-width: 800px; margin: 0 auto; padding: 24px; flex: 1; }
+  .card { background: white; border-radius: 8px; padding: 24px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+  .card h3 { margin-bottom: 12px; color: #333; }
+  .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; }
+  .stat { text-align: center; padding: 16px; background: #f8f9fa; border-radius: 6px; }
+  .stat .value { font-size: 2rem; font-weight: bold; color: #667eea; }
+  .stat .label { color: #666; margin-top: 4px; font-size: 0.875rem; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 12px; text-align: left; border-bottom: 1px solid #eee; }
+  th { color: #666; font-weight: 600; font-size: 0.875rem; }
+  .status { padding: 4px 8px; border-radius: 12px; font-size: 0.75rem; }
+  .status.ok { background: #d4edda; color: #155724; }
+  .status.warn { background: #fff3cd; color: #856404; }
+  footer { text-align: center; padding: 16px; color: #999; font-size: 0.75rem; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>全栈智码 · 彩蛋演示</h1>
+    <p>AI 自动生成的演示页面</p>
+  </header>
+  <div class="container">
+    <div class="card">
+      <h3>实时概览</h3>
+      <div class="stat-grid">
+        <div class="stat"><div class="value">99.8%</div><div class="label">系统可用率</div></div>
+        <div class="stat"><div class="value">1,247</div><div class="label">活跃设备</div></div>
+        <div class="stat"><div class="value">3</div><div class="label">当前告警</div></div>
+        <div class="stat"><div class="value">45.2kW</div><div class="label">当前功率</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>设备列表</h3>
+      <table>
+        <thead><tr><th>名称</th><th>状态</th><th>功率</th><th>温度</th></tr></thead>
+        <tbody>
+          <tr><td>逆变器 A-01</td><td><span class="status ok">正常</span></td><td>12.4kW</td><td>42°C</td></tr>
+          <tr><td>逆变器 A-02</td><td><span class="status ok">正常</span></td><td>11.8kW</td><td>40°C</td></tr>
+          <tr><td>逆变器 B-01</td><td><span class="status warn">警告</span></td><td>9.2kW</td><td>58°C</td></tr>
+          <tr><td>汇流箱 C-03</td><td><span class="status ok">正常</span></td><td>11.8kW</td><td>35°C</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <footer>由全栈智码 AI 自动生成 · 现场彩蛋模式</footer>
+</body>
+</html>

@@ -1,0 +1,8 @@
+{
+  "name": "骨架模板",
+  "oneLiner": "最小化项目骨架，用于快速启动",
+  "seedType": null,
+  "currentStage": "requirement",
+  "hitlMode": "manual",
+  "hitlThreshold": 0.8
+}

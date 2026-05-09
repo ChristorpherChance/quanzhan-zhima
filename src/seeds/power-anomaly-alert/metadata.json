@@ -1,0 +1,8 @@
+{
+  "name": "用电异常告警系统",
+  "oneLiner": "构建一个工业用电异常实时检测与告警系统，支持用电曲线分析、阈值告警、多级通知和统计报表",
+  "seedType": "power-anomaly",
+  "currentStage": "review",
+  "hitlMode": "auto",
+  "hitlThreshold": 0.8
+}

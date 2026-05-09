@@ -1,0 +1,8 @@
+{
+  "name": "光伏电站监控系统",
+  "oneLiner": "构建一个分布式光伏电站的实时监控与运维管理平台，支持设备状态监测、发电量统计、异常告警和巡检记录",
+  "seedType": "photovoltaic",
+  "currentStage": "review",
+  "hitlMode": "auto",
+  "hitlThreshold": 0.8
+}

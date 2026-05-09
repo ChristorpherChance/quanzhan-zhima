@@ -1,0 +1,25 @@
+{
+  "templates": [
+    {
+      "category": "dashboard",
+      "prompt": "构建一个实时数据仪表盘，展示 {topic} 的关键指标，包含图表卡片和筛选器",
+      "fallbackTopic": "光伏电站发电量"
+    },
+    {
+      "category": "form",
+      "prompt": "创建一个 {topic} 信息录入表单，包含字段验证和提交反馈",
+      "fallbackTopic": "设备巡检"
+    },
+    {
+      "category": "list",
+      "prompt": "做一个 {topic} 数据列表页，支持搜索、排序和分页",
+      "fallbackTopic": "告警记录"
+    },
+    {
+      "category": "monitor",
+      "prompt": "构建一个 {topic} 监控面板，实时刷新状态并支持告警阈值设置",
+      "fallbackTopic": "逆变器运行状态"
+    }
+  ],
+  "defaultFallback": "dashboard"
+}

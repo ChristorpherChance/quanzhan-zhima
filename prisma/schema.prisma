@@ -1,0 +1,93 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Project {
+  id            String   @id @default(cuid())
+  name          String
+  oneLiner      String
+  ownerId       String   @default("local-user")
+  currentStage  String   @default("requirement")
+  seedType      String?
+  hitlMode      String   @default("manual")
+  hitlThreshold Float    @default(0.8)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  artifacts     Artifact[]
+  conversations Conversation[]
+  jobs          Job[]
+  gates         Gate[]
+
+  @@index([currentStage])
+  @@index([seedType])
+}
+
+model Artifact {
+  id          String   @id @default(cuid())
+  projectId   String
+  type        String
+  version     Int      @default(1)
+  locked      Boolean  @default(false)
+  storagePath String
+  meta        String?
+  createdAt   DateTime @default(now())
+  lockedAt    DateTime?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, type])
+  @@index([projectId, type, version])
+}
+
+model Conversation {
+  id           String   @id @default(cuid())
+  projectId    String
+  agentType    String
+  messagesJson String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, agentType])
+}
+
+model Job {
+  id        String    @id @default(cuid())
+  projectId String
+  agentType String
+  type      String
+  status    String    @default("pending")
+  logs      String    @default("")
+  errorMsg  String?
+  costTokens Int      @default(0)
+  startedAt DateTime  @default(now())
+  endedAt   DateTime?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, agentType])
+  @@index([status])
+}
+
+model Gate {
+  id           String   @id @default(cuid())
+  projectId    String
+  type         String
+  status       String   @default("open")
+  mode         String   @default("manual")
+  confidence   Float?
+  lockedAt     DateTime?
+  reopenReason String?
+  createdAt    DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, type])
+}

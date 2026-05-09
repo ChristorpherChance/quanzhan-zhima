@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>光伏电站监控系统</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:system-ui,sans-serif;background:#f0f2f5;min-height:100vh}
+header{background:linear-gradient(135deg,#1a73e8,#0d47a1);color:white;padding:16px 24px;display:flex;justify-content:space-between;align-items:center}
+header h1{font-size:1.25rem}header .user{font-size:.875rem;opacity:.8}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;padding:24px;max-width:1200px;margin:0 auto}
+.card{background:white;border-radius:8px;padding:20px;box-shadow:0 1px 3px rgba(0,0,0,.1)}
+.card h3{font-size:.75rem;color:#666;text-transform:uppercase;margin-bottom:8px}
+.card .value{font-size:2rem;font-weight:700;color:#1a73e8}
+.card .unit{font-size:.875rem;color:#999}
+.main{display:grid;grid-template-columns:2fr 1fr;gap:16px;padding:0 24px 24px;max-width:1200px;margin:0 auto}
+table{width:100%;border-collapse:collapse;margin-top:12px}
+th,td{padding:10px 12px;text-align:left;border-bottom:1px solid #eee;font-size:.875rem}
+th{color:#666;font-weight:600;font-size:.75rem;text-transform:uppercase}
+.badge{padding:3px 8px;border-radius:12px;font-size:.75rem}
+.badge.online{background:#e6f4ea;color:#137333}
+.badge.warning{background:#fef7e0;color:#b06000}
+.chart-placeholder{background:#f8f9fa;border-radius:8px;height:200px;display:flex;align-items:center;justify-content:center;color:#999}
+</style>
+</head>
+<body>
+<header><h1>光伏电站监控系统</h1><span class="user">运维工程师</span></header>
+<div class="grid">
+  <div class="card"><h3>总功率</h3><div class="value">45.2<span class="unit"> kW</span></div></div>
+  <div class="card"><h3>今日发电量</h3><div class="value">287.5<span class="unit"> kWh</span></div></div>
+  <div class="card"><h3>系统可用率</h3><div class="value">99.8<span class="unit">%</span></div></div>
+  <div class="card"><h3>活跃告警</h3><div class="value">3<span class="unit"> 条</span></div></div>
+</div>
+<div class="main">
+  <div class="card">
+    <h3>设备状态</h3>
+    <table>
+      <thead><tr><th>设备</th><th>类型</th><th>功率</th><th>温度</th><th>状态</th></tr></thead>
+      <tbody>
+        <tr><td>逆变器 A-01</td><td>逆变器</td><td>12.4 kW</td><td>42°C</td><td><span class="badge online">在线</span></td></tr>
+        <tr><td>逆变器 A-02</td><td>逆变器</td><td>11.8 kW</td><td>40°C</td><td><span class="badge online">在线</span></td></tr>
+        <tr><td>逆变器 B-01</td><td>逆变器</td><td>9.2 kW</td><td>58°C</td><td><span class="badge warning">警告</span></td></tr>
+        <tr><td>汇流箱 C-03</td><td>汇流箱</td><td>11.8 kW</td><td>35°C</td><td><span class="badge online">在线</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="card">
+    <h3>功率曲线 (24h)</h3>
+    <div class="chart-placeholder">功率趋势图</div>
+  </div>
+</div>
+</body>
+</html>

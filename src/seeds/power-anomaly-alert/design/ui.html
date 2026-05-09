@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>用电异常告警系统</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:system-ui,sans-serif;background:#f0f2f5;min-height:100vh}
+header{background:linear-gradient(135deg,#d32f2f,#b71c1c);color:white;padding:16px 24px;display:flex;justify-content:space-between;align-items:center}
+header h1{font-size:1.25rem}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;padding:24px;max-width:1200px;margin:0 auto}
+.card{background:white;border-radius:8px;padding:20px;box-shadow:0 1px 3px rgba(0,0,0,.1)}
+.card h3{font-size:.75rem;color:#666;text-transform:uppercase;margin-bottom:8px}
+.card .value{font-size:2rem;font-weight:700}
+.card.l1 .value{color:#f9a825}
+.card.l2 .value{color:#ef6c00}
+.card.l3 .value{color:#d32f2f}
+.card .unit{font-size:.875rem;color:#999}
+.main{display:grid;grid-template-columns:2fr 1fr;gap:16px;padding:0 24px 24px;max-width:1200px;margin:0 auto}
+table{width:100%;border-collapse:collapse;margin-top:12px}
+th,td{padding:10px 12px;text-align:left;border-bottom:1px solid #eee;font-size:.875rem}
+th{color:#666;font-weight:600;font-size:.75rem;text-transform:uppercase}
+.badge{padding:3px 8px;border-radius:12px;font-size:.75rem}
+.badge.l1{background:#fff9c4;color:#f57f17}
+.badge.l2{background:#ffe0b2;color:#e65100}
+.badge.l3{background:#ffcdd2;color:#b71c1c}
+.badge.resolved{background:#e8f5e9;color:#1b5e20}
+.badge.pending{background:#e3f2fd;color:#0d47a1}
+</style>
+</head>
+<body>
+<header><h1>用电异常告警系统</h1><span>电气工程师</span></header>
+<div class="grid">
+  <div class="card"><h3>监测点总数</h3><div class="value">48<span class="unit"> 个</span></div></div>
+  <div class="card l1"><h3>L1 预警</h3><div class="value">2<span class="unit"> 条</span></div></div>
+  <div class="card l2"><h3>L2 警告</h3><div class="value">1<span class="unit"> 条</span></div></div>
+  <div class="card l3"><h3>L3 严重</h3><div class="value">0<span class="unit"> 条</span></div></div>
+</div>
+<div class="main">
+  <div class="card">
+    <h3>告警列表</h3>
+    <table>
+      <thead><tr><th>时间</th><th>监测点</th><th>指标</th><th>当前值</th><th>级别</th><th>状态</th></tr></thead>
+      <tbody>
+        <tr><td>14:32:15</td><td>1#变压器 出线A相</td><td>电流</td><td>92.4A</td><td><span class="badge l2">L2</span></td><td><span class="badge pending">待处理</span></td></tr>
+        <tr><td>13:18:02</td><td>3#配电柜 总进线</td><td>电压</td><td>418V</td><td><span class="badge l1">L1</span></td><td><span class="badge resolved">已解决</span></td></tr>
+        <tr><td>11:05:47</td><td>2#车间 动力柜</td><td>功率</td><td>58.2kW</td><td><span class="badge l1">L1</span></td><td><span class="badge pending">待处理</span></td></tr>
+        <tr><td>09:22:33</td><td>1#变压器 出线B相</td><td>功率因数</td><td>0.72</td><td><span class="badge l2">L2</span></td><td><span class="badge resolved">已解决</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="card">
+    <h3>用电曲线 (24h)</h3>
+    <div style="background:#f8f9fa;border-radius:8px;height:200px;display:flex;align-items:center;justify-content:center;color:#999">用电趋势图</div>
+  </div>
+</div>
+</body>
+</html>
