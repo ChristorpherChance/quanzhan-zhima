@@ -3,11 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -p 3002",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:unit": "vitest run",
+    "test:e2e": "playwright test",
     "verify": "tsx scripts/verify-env.ts",
     "seed-cache": "tsx scripts/seed-cache.ts",
     "smoke:llm": "tsx scripts/smoke-llm.ts",
@@ -16,12 +19,18 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio"
   },
+  "engines": {
+    "node": ">=20.10",
+    "pnpm": ">=9"
+  },
+  "packageManager": "pnpm@9.x.x",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.27.3",
     "@base-ui/react": "^1.4.1",
     "@mariozechner/pi-agent-core": "0.73.0",
     "@mariozechner/pi-ai": "0.73.0",
     "@mariozechner/pi-coding-agent": "0.73.0",
+    "@monaco-editor/react": "^4.7.0",
     "@prisma/client": "5.18.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -29,6 +38,7 @@
     "eventsource-parser": "^1.1.2",
     "exceljs": "^4.4.0",
     "lucide-react": "^0.439.0",
+    "monaco-editor": "^0.55.1",
     "next": "14.2.35",
     "openai": "^4.104.0",
     "p-queue": "^8.1.1",

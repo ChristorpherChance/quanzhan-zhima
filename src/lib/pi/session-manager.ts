@@ -49,14 +49,21 @@ class PiSessionPool {
   private sessions = new Map<string, ActiveSession>()
   private idleTimeoutMs = 30 * 60 * 1000 // 30 分钟空闲回收
 
+  /** Composite key for per-agentType session isolation */
+  private key(projectId: string, agentType?: string): string {
+    return agentType ? `${projectId}:${agentType}` : projectId
+  }
+
   async getOrCreate(opts: {
     projectId: string
+    agentType?: string
     workspaceDir: string
     provider?: string
     modelId?: string
     systemPromptOverride?: string
   }): Promise<ActiveSession> {
-    const existing = this.sessions.get(opts.projectId)
+    const sessionKey = this.key(opts.projectId, opts.agentType)
+    const existing = this.sessions.get(sessionKey)
     if (existing) {
       existing.lastUsedAt = Date.now()
       return existing
@@ -120,35 +127,42 @@ class PiSessionPool {
       },
     }
 
-    this.sessions.set(opts.projectId, active)
-    log("pi", `PiSessionPool: created session for project=${opts.projectId}`)
+    this.sessions.set(sessionKey, active)
+    log("pi", `PiSessionPool: created session for ${sessionKey}`)
     return active
   }
 
-  get(projectId: string): ActiveSession | undefined {
-    const s = this.sessions.get(projectId)
+  get(projectId: string, agentType?: string): ActiveSession | undefined {
+    const k = this.key(projectId, agentType)
+    const s = this.sessions.get(k)
     if (s) s.lastUsedAt = Date.now()
     return s
   }
 
-  dispose(projectId: string) {
-    const s = this.sessions.get(projectId)
+  dispose(projectId: string, agentType?: string) {
+    const k = this.key(projectId, agentType)
+    const s = this.sessions.get(k)
     if (s) {
       s.dispose()
-      log("pi", `PiSessionPool: disposed session project=${projectId}`)
+      this.sessions.delete(k)
+      log("pi", `PiSessionPool: disposed session ${k}`)
     }
   }
 
   disposeAll() {
-    for (const [id] of this.sessions) this.dispose(id)
+    for (const [key, s] of this.sessions) {
+      s.dispose()
+      this.sessions.delete(key)
+    }
   }
 
   startIdleCleanup() {
     setInterval(() => {
       const now = Date.now()
-      for (const [id, s] of this.sessions) {
+      for (const [key, s] of this.sessions) {
         if (now - s.lastUsedAt > this.idleTimeoutMs) {
-          this.dispose(id)
+          s.dispose()
+          this.sessions.delete(key)
         }
       }
     }, 60_000).unref()
@@ -156,8 +170,8 @@ class PiSessionPool {
 
   // ── 会话树操作 ──────────────────────────────────────────
 
-  async getTree(projectId: string): Promise<SessionTreeNode[]> {
-    const active = this.get(projectId)
+  async getTree(projectId: string, agentType?: string): Promise<SessionTreeNode[]> {
+    const active = this.get(projectId, agentType)
     if (!active) return []
 
     const rawTree = active.sessionManager.getTree()
@@ -186,57 +200,63 @@ class PiSessionPool {
     return rawTree.map(mapNode)
   }
 
-  async compact(projectId: string) {
-    const active = this.get(projectId)
+  async compact(projectId: string, agentType?: string) {
+    const active = this.get(projectId, agentType)
     if (!active) throw new Error("No active session")
     return active.session.compact()
   }
 
-  async navigate(projectId: string, nodeId: string) {
-    const active = this.get(projectId)
+  async navigate(projectId: string, nodeId: string, agentType?: string) {
+    const active = this.get(projectId, agentType)
     if (!active) throw new Error("No active session")
     return active.session.navigateTree(nodeId)
   }
 
-  async fork(projectId: string) {
-    const active = this.get(projectId)
+  async fork(projectId: string, agentType?: string) {
+    const active = this.get(projectId, agentType)
     if (!active) throw new Error("No active session")
     active.sessionManager.branch(active.sessionManager.getLeafId() ?? "")
   }
 
   // ── Steer / Follow-up ───────────────────────────────────
 
-  async sendMessage(projectId: string, message: string) {
-    const active = this.get(projectId)
+  async sendMessage(projectId: string, message: string, agentType?: string) {
+    const active = this.get(projectId, agentType)
     if (!active) throw new Error("No active session")
     return active.session.prompt(message)
   }
 
-  async steer(projectId: string, message: string) {
-    const active = this.get(projectId)
+  async steer(projectId: string, message: string, agentType?: string) {
+    const active = this.get(projectId, agentType)
     if (!active) throw new Error("No active session")
     return active.session.steer(message)
   }
 
-  async followUp(projectId: string, message: string) {
-    const active = this.get(projectId)
+  async followUp(projectId: string, message: string, agentType?: string) {
+    const active = this.get(projectId, agentType)
     if (!active) throw new Error("No active session")
     return active.session.followUp(message)
   }
 
   // ── 模型 / Thinking 切换 ─────────────────────────────────
 
-  async setModel(projectId: string, model: ReturnType<ModelRegistry["find"]>) {
-    const active = this.get(projectId)
+  async setModel(projectId: string, model: ReturnType<ModelRegistry["find"]>, agentType?: string) {
+    const active = this.get(projectId, agentType)
     if (!active) throw new Error("No active session")
     if (!model) throw new Error("Model not found")
     return active.session.setModel(model)
   }
 
-  async setThinkingLevel(projectId: string, level: "off" | "low" | "high") {
-    const active = this.get(projectId)
+  async setThinkingLevel(projectId: string, level: "off" | "low" | "high", agentType?: string) {
+    const active = this.get(projectId, agentType)
     if (!active) throw new Error("No active session")
     return active.session.setThinkingLevel(level)
+  }
+
+  /** List all session keys for a project */
+  listProjectSessions(projectId: string): string[] {
+    const prefix = `${projectId}:`
+    return [...this.sessions.keys()].filter(k => k === projectId || k.startsWith(prefix))
   }
 }
 

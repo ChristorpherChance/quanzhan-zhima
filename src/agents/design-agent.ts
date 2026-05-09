@@ -62,11 +62,18 @@ function getOutputPath(projectId: string, subtype: string): string {
   return join(paths.design(projectId), `${subtype}.${getOutputExt(subtype)}`)
 }
 
+const END_MARKER_RE = /<!--\s*END:design-(\w+)\s*-->/
+
+async function hasEndMarker(content: string, subtype: string): Promise<boolean> {
+  return END_MARKER_RE.test(content)
+}
+
 export async function generate(
   ctx: AgentRunCtx,
   subtype: string,
 ): Promise<string> {
   log("agent", `design:generate project=${ctx.projectId} subtype=${subtype}`)
+  ctx.setPhase("thinking", `生成 ${subtype} 设计`)
   ctx.send("progress", {
     phase: `design-${subtype}`,
     message: `正在生成 ${subtype} 设计...`,
@@ -85,28 +92,33 @@ export async function generate(
     }
 
     const systemPrompt = DESIGN_SYSTEM(subtype)
-    const streamGen = stream({
-      task: "reason-heavy",
-      messages: [
-        { role: "system", content: systemPrompt },
-        {
-          role: "user",
-          content: `以下为 PRD 内容，请据此生成 ${subtype} 设计方案:\n\n${prdContent}`,
-        },
-      ],
-    })
-
     let content = ""
-    for await (const event of streamGen) {
-      if (event.type === "delta" && event.text) {
-        content += event.text
-        ctx.send("text_delta", { text: event.text })
-      } else if (event.type === "error") {
-        throw new Error(event.error ?? "stream error")
-      }
+    const MAX_CONTINUATIONS = 3
+
+    // 第一轮生成
+    content = await streamOnce(ctx, subtype, systemPrompt, prdContent, content)
+
+    // 自动续写：检查 END 标记，最多续写 3 次
+    for (let i = 0; i < MAX_CONTINUATIONS; i++) {
+      if (await hasEndMarker(content, subtype)) break
+
+      ctx.send("progress", {
+        phase: `design-${subtype}-continue`,
+        message: `检测到截断，自动续写第 ${i + 1}/${MAX_CONTINUATIONS} 次...`,
+      })
+      log("agent", `design:generate continuation #${i + 1} for ${subtype}`)
+
+      content = await streamOnce(
+        ctx,
+        subtype,
+        systemPrompt,
+        `请从上次中断处继续，不要重复已写内容。上次输出结尾:\n\n${content.slice(-500)}\n\n请继续完成剩余内容，完成后输出 <!-- END:design-${subtype} --> 标记。`,
+        content,
+      )
     }
 
     // 写入文件
+    ctx.setPhase("writing", `写入 ${subtype} 文件`)
     const outputPath = getOutputPath(ctx.projectId, subtype)
     await fs.mkdir(dirname(outputPath), { recursive: true })
     await fs.writeFile(outputPath, content, "utf-8")
@@ -117,7 +129,7 @@ export async function generate(
       `design-${subtype}`,
       content,
       outputPath,
-      { subtype },
+      { subtype, truncated: !(await hasEndMarker(content, subtype)) },
     )
 
     // 更新 PLAN.md
@@ -132,6 +144,35 @@ export async function generate(
     ctx.send("error", { code: "E_LLM_FAILED", message: msg })
     throw e
   }
+}
+
+/** 单次流式调用，支持追加模式 */
+async function streamOnce(
+  ctx: AgentRunCtx,
+  subtype: string,
+  systemPrompt: string,
+  userMessage: string,
+  existingContent: string,
+): Promise<string> {
+  const streamGen = stream({
+    task: "reason-heavy",
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userMessage },
+    ],
+  })
+
+  let buffer = existingContent
+  for await (const event of streamGen) {
+    if (event.type === "delta" && event.text) {
+      buffer += event.text
+      ctx.send("text_delta", { text: event.text })
+    } else if (event.type === "error") {
+      throw new Error(event.error ?? "stream error")
+    }
+  }
+
+  return buffer
 }
 
 export async function edit(

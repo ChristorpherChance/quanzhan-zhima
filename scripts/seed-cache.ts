@@ -24,6 +24,9 @@ interface SeedMeta {
 const SEEDS = [
   { dir: "photovoltaic-monitor", type: "photovoltaic" },
   { dir: "power-anomaly-alert", type: "power-anomaly" },
+  { dir: "todo-app", type: "todo" },
+  { dir: "egg-three-pigs", type: "egg" },
+  { dir: "simple-blog", type: "blog" },
 ] as const
 
 async function copyDir(src: string, dst: string) {
@@ -128,16 +131,17 @@ async function seedProject(dirName: string, seedType: string) {
     }
   }
 
-  // Create Gate records
-  const gates = ["G1", "G2", "G3"] as const
+  // Create Gate records (G0-G6)
+  const gates = ["G0", "G1", "G2", "G3", "G4", "G5", "G6"] as const
+  const lockedUpTo = meta.currentStage === "done" ? 6 : meta.currentStage === "export" ? 5 : meta.currentStage === "review" ? 4 : meta.currentStage === "dev" ? 3 : meta.currentStage === "design" ? 2 : meta.currentStage === "requirement" ? 1 : 0
   for (const type of gates) {
-    const isLocked = (type === "G1" || type === "G2")
+    const idx = gates.indexOf(type)
     await prisma.gate.create({
       data: {
         projectId: project.id,
         type,
-        status: isLocked ? "locked" : "open",
-        lockedAt: isLocked ? new Date() : null,
+        status: idx <= lockedUpTo ? "locked" : "open",
+        lockedAt: idx <= lockedUpTo ? new Date() : null,
       },
     })
   }

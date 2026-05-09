@@ -73,30 +73,60 @@ export function getPiRegistry(
   }
 
   // Register custom providers for models NOT in the Pi SDK built-in list.
-  const customOnly: LlmProviderKey[] = ["kimi", "xiaomi"]
+  // deepseek 也走自定义注册，确保 model id 受控（deepseek-chat / deepseek-reasoner）
+  const customOnly: LlmProviderKey[] = ["deepseek", "kimi", "xiaomi"]
   for (const key of customOnly) {
     const cfg = config[key]
     if (!cfg.enabled) continue
 
     const api = ("openai-completions" as const)
 
-    modelRegistry.registerProvider(PI_PROVIDER[key], {
-      name: PI_PROVIDER[key],
-      baseUrl: cfg.baseURL!,
-      api,
-      models: [
-        {
-          id: cfg.model,
-          name: cfg.model,
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 128_000,
-          maxTokens: 8192,
-        },
-      ],
-    })
-    log("pi", `✓ Custom provider registered: ${PI_PROVIDER[key]} / ${cfg.model}`)
+    if (key === "deepseek") {
+      modelRegistry.registerProvider(PI_PROVIDER[key], {
+        name: PI_PROVIDER[key],
+        baseUrl: cfg.baseURL!,
+        api,
+        models: [
+          {
+            id: "deepseek-chat",
+            name: "DeepSeek Chat",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 64_000,
+            maxTokens: 8192,
+          },
+          {
+            id: "deepseek-reasoner",
+            name: "DeepSeek Reasoner",
+            reasoning: true,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 64_000,
+            maxTokens: 8192,
+          },
+        ],
+      })
+      log("pi", `✓ Custom provider registered: ${PI_PROVIDER[key]} (deepseek-chat + deepseek-reasoner)`)
+    } else {
+      modelRegistry.registerProvider(PI_PROVIDER[key], {
+        name: PI_PROVIDER[key],
+        baseUrl: cfg.baseURL!,
+        api,
+        models: [
+          {
+            id: cfg.model,
+            name: cfg.model,
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 128_000,
+            maxTokens: 8192,
+          },
+        ],
+      })
+      log("pi", `✓ Custom provider registered: ${PI_PROVIDER[key]} / ${cfg.model}`)
+    }
   }
 
   cached = { modelRegistry, authStorage }

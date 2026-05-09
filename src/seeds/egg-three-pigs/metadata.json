@@ -1,0 +1,8 @@
+{
+  "name": "三只小猪 · 互动绘本",
+  "oneLiner": "构建一个三只小猪童话故事的互动绘本应用，支持翻页动画、角色点击交互、语音朗读和趣味问答",
+  "seedType": "egg",
+  "currentStage": "dev",
+  "hitlMode": "auto",
+  "hitlThreshold": 0.8
+}

@@ -11,9 +11,10 @@ import { ThinkingCard } from "@/components/workbench/thinking-card"
 import { ToolCallCard } from "@/components/workbench/tool-call-card"
 import { EnhancedInput } from "@/components/workbench/enhanced-input"
 import { StreamingActions } from "@/components/workbench/streaming-actions"
+import { PhaseTracker, type PhaseTrackerData, type TrackerPhase } from "@/components/workbench/PhaseTracker"
 import { useSSE } from "@/lib/use-sse"
 import { cn } from "@/lib/utils"
-import { Check, X, Bot, User as UserIcon, GitBranch, GitFork, ListTree, ChevronDown } from "lucide-react"
+import { Check, X, Bot, User as UserIcon, GitBranch, GitFork, ListTree, ChevronDown, StopCircle } from "lucide-react"
 import type { SessionTreeNode } from "@/lib/pi/session-manager"
 
 type BlockKind = "thinking" | "text" | "tool-call" | "error"
@@ -43,6 +44,11 @@ interface DraftInfo {
   baseVersion: number
 }
 
+interface HeartbeatEntry {
+  ts: number
+  summary: string
+}
+
 type Action =
   | { type: "addUser"; text: string }
   | { type: "addAssistantBlock"; kind: BlockKind; content: string; toolName?: string; ok?: boolean; toolStatus?: ToolStatus; toolArgs?: string }
@@ -54,13 +60,19 @@ type Action =
   | { type: "toggleCollapse"; id: number }
   | { type: "setDraft"; draft: DraftInfo | null }
   | { type: "setJobEnded"; ended: boolean }
+  | { type: "setAborted"; aborted: boolean }
+  | { type: "setPhase"; data: PhaseTrackerData | null }
+  | { type: "addHeartbeat"; entry: HeartbeatEntry }
 
 interface State {
   messages: Message[]
   streaming: boolean
+  aborted: boolean
   draft: DraftInfo | null
   jobEnded: boolean
   currentAssistantId: number | null
+  phase: PhaseTrackerData | null
+  heartbeats: HeartbeatEntry[]
 }
 
 let msgId = 0
@@ -173,7 +185,7 @@ function reducer(state: State, action: Action): State {
       return { ...state, messages: [...state.messages, msg] }
     }
     case "clear":
-      return { messages: [], streaming: false, draft: null, jobEnded: false, currentAssistantId: null }
+      return { messages: [], streaming: false, aborted: false, draft: null, jobEnded: false, currentAssistantId: null, phase: null, heartbeats: [] }
     case "setStreaming":
       return { ...state, streaming: action.streaming }
     case "toggleCollapse":
@@ -187,6 +199,19 @@ function reducer(state: State, action: Action): State {
       return { ...state, draft: action.draft }
     case "setJobEnded":
       return { ...state, jobEnded: action.ended }
+    case "setAborted":
+      return {
+        ...state,
+        aborted: action.aborted,
+        streaming: false,
+        phase: action.aborted
+          ? { phase: "aborted" as TrackerPhase, label: "已终止", tokenIn: 0, tokenOut: 0, elapsedMs: 0 }
+          : state.phase,
+      }
+    case "setPhase":
+      return { ...state, phase: action.data }
+    case "addHeartbeat":
+      return { ...state, heartbeats: [...state.heartbeats.slice(-29), action.entry] }
   }
 }
 
@@ -227,9 +252,12 @@ export const AgentChat = forwardRef<AgentChatHandle, AgentChatProps>(function Ag
   const [state, dispatch] = useReducer(reducer, {
     messages: [],
     streaming: false,
+    aborted: false,
     draft: null,
     jobEnded: false,
     currentAssistantId: null,
+    phase: null,
+    heartbeats: [],
   })
   const [input, setInput] = useState("")
   const onDoneRef = useCallback(() => onDone?.(), [onDone])
@@ -324,6 +352,23 @@ export const AgentChat = forwardRef<AgentChatHandle, AgentChatProps>(function Ag
     )
   }
 
+  const handleStop = async () => {
+    dispatch({ type: "setAborted", aborted: true })
+    dispatch({ type: "addSystem", text: "⏹ 已请求终止..." })
+    dispatch({ type: "setStreaming", streaming: false })
+
+    // Abort via sessions route
+    if (projectId) {
+      fetch(`/api/projects/${projectId}/sessions/abort`, { method: "POST" }).catch(() => {})
+    }
+    // Cancel the job
+    if (jobId) {
+      fetch(`/api/jobs/${jobId}/cancel`, { method: "POST" }).catch(() => {})
+    }
+
+    onDone?.()
+  }
+
   useSSE(streamingUrl, useCallback((event: string, raw: unknown) => {
     if (event === "progress") {
       const d = raw as { phase?: string; message?: string }
@@ -398,16 +443,23 @@ export const AgentChat = forwardRef<AgentChatHandle, AgentChatProps>(function Ag
         ok: d.ok,
         toolStatus: d.ok !== false ? "success" : "error",
       })
-    } else if (event === "tool-call") {
-      const d = raw as { name?: string; ok?: boolean; args?: unknown; result?: unknown }
+    } else if (event === "aborted") {
+      dispatch({ type: "setAborted", aborted: true })
+      dispatch({ type: "addSystem", text: "⏹ 任务已终止" })
+      dispatch({ type: "finalizeAssistant" })
+    } else if (event === "phase") {
+      const d = raw as PhaseTrackerData
+      dispatch({ type: "setPhase", data: d })
+      // 根据 phase 设置 streaming 状态
+      if (d.phase === "done" || d.phase === "error" || d.phase === "aborted") {
+        dispatch({ type: "setStreaming", streaming: false })
+        if (d.phase === "aborted") dispatch({ type: "setAborted", aborted: true })
+      }
+    } else if (event === "heartbeat") {
+      const d = raw as { ts: number; summary?: string }
       dispatch({
-        type: "addAssistantBlock",
-        kind: "tool-call",
-        content: JSON.stringify(d.args ?? d.result ?? {}, null, 2),
-        toolName: d.name ?? "unknown",
-        ok: d.ok,
-        toolStatus: d.ok !== undefined ? (d.ok ? "success" : "error") : undefined,
-        toolArgs: d.args ? JSON.stringify(d.args, null, 2) : undefined,
+        type: "addHeartbeat",
+        entry: { ts: d.ts ?? Date.now(), summary: d.summary ?? "心跳" },
       })
     } else if (event === "draft") {
       const d = raw as DraftInfo
@@ -519,7 +571,20 @@ export const AgentChat = forwardRef<AgentChatHandle, AgentChatProps>(function Ag
             )}
           </h3>
           {jobId && state.streaming && (
-            <Badge variant="secondary" className="animate-pulse">运行中</Badge>
+            <button
+              type="button"
+              className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium bg-red-100 text-red-700 hover:bg-red-200 transition-colors"
+              onClick={handleStop}
+              title="停止生成"
+            >
+              <StopCircle className="w-3.5 h-3.5" />
+              停止
+            </button>
+          )}
+          {state.aborted && (
+            <Badge variant="destructive" className="gap-1">
+              <X className="w-3 h-3" /> 已中止
+            </Badge>
           )}
         </div>
 
@@ -573,6 +638,13 @@ export const AgentChat = forwardRef<AgentChatHandle, AgentChatProps>(function Ag
           </div>
         )}
       </div>
+
+      {/* PhaseTracker 全局进度面板 */}
+      <PhaseTracker
+        data={state.phase}
+        heartbeats={state.heartbeats}
+        className="shrink-0"
+      />
 
       <ScrollArea className="flex-1 p-3">
         <div className="space-y-3">

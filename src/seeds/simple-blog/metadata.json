@@ -1,0 +1,8 @@
+{
+  "name": "简易博客系统",
+  "oneLiner": "构建一个极简风格的博客发布与阅读平台，支持 Markdown 写作、文章管理、标签分类和 RSS 订阅",
+  "seedType": "blog",
+  "currentStage": "design",
+  "hitlMode": "auto",
+  "hitlThreshold": 0.8
+}

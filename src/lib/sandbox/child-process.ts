@@ -6,13 +6,14 @@ import type { SandboxHandle, SandboxStartOpts } from "./types"
 const registry = new Map<string, SandboxHandle>()
 
 function sanitizedEnv(port: number): NodeJS.ProcessEnv {
-  const e = { ...process.env } as Record<string, string | undefined>
-  delete e.DEEPSEEK_API_KEY
-  delete e.ANTHROPIC_API_KEY
-  delete e.KIMI_API_KEY
-  delete e.XIAOMI_API_KEY
-  delete e.OPENAI_API_KEY
-  return { ...e, PORT: String(port) } as unknown as NodeJS.ProcessEnv
+  // 白名单策略：仅传递必要的 env vars，防止 API key/baseURL 泄漏到子进程
+  const allow = ["PATH", "HOME", "TMPDIR", "TEMP", "TMP", "NODE_OPTIONS", "LANG", "SYSTEMROOT", "USERPROFILE"]
+  const e: Record<string, string> = { PORT: String(port) }
+  for (const k of allow) {
+    const v = process.env[k]
+    if (v) e[k] = v
+  }
+  return e as unknown as NodeJS.ProcessEnv
 }
 
 async function waitPort(port: number, timeout: number) {

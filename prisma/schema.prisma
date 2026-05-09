@@ -16,6 +16,7 @@ model Project {
   seedType      String?
   hitlMode      String   @default("manual")
   hitlThreshold Float    @default(0.8)
+  confidence    Float?   @default(0)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -23,6 +24,7 @@ model Project {
   conversations Conversation[]
   jobs          Job[]
   gates         Gate[]
+  piSessions    PiSession[]
 
   @@index([currentStage])
   @@index([seedType])
@@ -66,6 +68,7 @@ model Job {
   status    String    @default("pending")
   logs      String    @default("")
   errorMsg  String?
+  meta      String?
   costTokens Int      @default(0)
   startedAt DateTime  @default(now())
   endedAt   DateTime?
@@ -90,4 +93,31 @@ model Gate {
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   @@unique([projectId, type])
+}
+
+model PiSession {
+  id         String   @id @default(cuid())
+  projectId  String
+  agentType  String
+  leafId     String?
+  modelId    String
+  thinking   String   @default("off")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  messages   Message[]
+
+  @@unique([projectId, agentType])
+  @@index([projectId])
+}
+
+model Message {
+  id        String   @id @default(cuid())
+  sessionId String
+  role      String
+  blocks    String
+  ts        DateTime @default(now())
+  session   PiSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, ts])
 }

@@ -8,7 +8,8 @@ import { Badge } from "@/components/ui/badge"
 import { AgentChat, type AgentChatHandle } from "@/components/workbench/agent-chat"
 import { ThreePane } from "@/components/workbench/three-pane"
 import { StageNav } from "@/components/workbench/stage-nav"
-import { Wand2 } from "lucide-react"
+import { CodeBrowser } from "@/components/workbench/CodeBrowser"
+import { Wand2, Code, Eye } from "lucide-react"
 
 export default function DevPage() {
   const params = useParams()
@@ -17,6 +18,7 @@ export default function DevPage() {
   const [sandboxUrl, setSandboxUrl] = useState<string | null>(null)
   const [jobId, setJobId] = useState<string | null>(null)
   const [stage, setStage] = useState<"idle" | "generating" | "sandbox-starting" | "ready">("idle")
+  const [viewMode, setViewMode] = useState<"code" | "preview">("code")
   const [project, setProject] = useState<{ currentStage: string; name: string } | null>(null)
   const [gates, setGates] = useState<Array<{ type: string; status: string }>>([])
   const chatRef = useRef<AgentChatHandle>(null)
@@ -171,9 +173,38 @@ export default function DevPage() {
               </Button>
             </div>
           </div>
-          <div className="flex-1 overflow-auto p-4">
-            {sandboxUrl ? (
-              <iframe src={sandboxUrl} className="w-full h-full border rounded" title="Sandbox Preview" />
+          <div className="flex-1 min-h-0">
+            {stage === "ready" && sandboxUrl ? (
+              <div className="flex flex-col h-full">
+                {/* 视图切换 tab */}
+                <div className="flex items-center gap-1 px-3 py-1 border-b">
+                  <Button
+                    variant={viewMode === "code" ? "default" : "ghost"}
+                    size="sm"
+                    className="h-7 text-xs gap-1"
+                    onClick={() => setViewMode("code")}
+                  >
+                    <Code className="w-3 h-3" />
+                    代码
+                  </Button>
+                  <Button
+                    variant={viewMode === "preview" ? "default" : "ghost"}
+                    size="sm"
+                    className="h-7 text-xs gap-1"
+                    onClick={() => setViewMode("preview")}
+                  >
+                    <Eye className="w-3 h-3" />
+                    预览
+                  </Button>
+                </div>
+                <div className="flex-1 min-h-0">
+                  {viewMode === "code" ? (
+                    <CodeBrowser projectId={pid} sandboxUrl={sandboxUrl} />
+                  ) : (
+                    <iframe src={sandboxUrl} className="w-full h-full border-0" title="Sandbox Preview" />
+                  )}
+                </div>
+              </div>
             ) : stage === "generating" ? (
               <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2">
                 <p>AI 正在生成代码...</p>

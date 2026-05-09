@@ -206,7 +206,6 @@ export async function runPiSession(
         }
         case "tool_execution_start": {
           opts.onEvent?.({ type: "tool_start", data: event })
-          opts.onEvent?.({ type: "tool-call", data: event })
           // 捕获 workspace_write 参数
           const startEvt = event as { name?: string; params?: { path?: string; content?: string } }
           if (startEvt.name === "workspace_write" && startEvt.params?.path && startEvt.params?.content) {
@@ -219,7 +218,6 @@ export async function runPiSession(
           break
         case "tool_execution_end": {
           opts.onEvent?.({ type: "tool_end", data: event })
-          opts.onEvent?.({ type: "tool-call", data: event })
           // 记录 workspace_write 完成的文件
           const endEvt = event as { name?: string; ok?: boolean }
           if (endEvt.name === "workspace_write" && pendingWrite && endEvt.ok !== false) {

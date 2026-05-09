@@ -1,0 +1,8 @@
+{
+  "name": "简易待办清单",
+  "oneLiner": "构建一个简洁实用的待办事项管理应用，支持任务增删改查、优先级标记、分类筛选和完成统计",
+  "seedType": "todo",
+  "currentStage": "design",
+  "hitlMode": "auto",
+  "hitlThreshold": 0.8
+}

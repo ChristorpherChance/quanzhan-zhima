@@ -19,7 +19,7 @@ export function ThreePane({
   const [rightOpen, setRightOpen] = useState(true)
 
   return (
-    <div className="flex h-[calc(100vh-3.5rem)] flex-col">
+    <div className="flex h-full flex-col">
       <div className="flex flex-1 overflow-hidden">
         {/* 左侧栏 */}
         <aside

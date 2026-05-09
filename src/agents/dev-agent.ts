@@ -23,15 +23,44 @@ export async function runDev(ctx: AgentRunCtx, instruction?: string): Promise<vo
   const prompt = instruction ?? "请开始按系统提示完成任务。"
   ctx.send("log", { line: `Pi 启动: ${workspaceDir}` })
 
+  // Token accumulators
+  let tokenIn = 0
+  let tokenOut = 0
+
   try {
     const r = await runPiSession({
       projectId: project.id,
       workspaceDir,
       prompt,
       provider: "deepseek",
-      modelId: "deepseek-v4-pro",
+      modelId: "deepseek-chat",
       timeoutMs: 240_000,
-      onEvent: (e) => ctx.send(e.type as "log" | "tool-call" | "result" | "error", e.data),
+      onEvent: (e) => {
+        // 追踪 phase 变化
+        switch (e.type) {
+          case "tool_start":
+            ctx.setPhase("tool_running", `执行 ${(e.data as { name?: string })?.name ?? "工具"}`)
+            break
+          case "tool_end":
+            ctx.setPhase("writing", "写入文件")
+            break
+          case "thinking_delta":
+            ctx.setPhase("thinking", "思考中")
+            break
+          case "text_delta":
+            ctx.setPhase("writing", "生成代码")
+            break
+        }
+        // 累加 token（如果 Pi 事件包含 usage 信息）
+        const data = e.data as Record<string, unknown> | undefined
+        if (data?.usage) {
+          const u = data.usage as { input_tokens?: number; output_tokens?: number }
+          if (u.input_tokens) tokenIn += u.input_tokens
+          if (u.output_tokens) tokenOut += u.output_tokens
+          ctx.addTokens(u.input_tokens ?? 0, u.output_tokens ?? 0)
+        }
+        ctx.send(e.type as "log" | "result" | "error" | "text_delta" | "thinking_delta" | "tool_start" | "tool_update" | "tool_end", e.data)
+      },
     })
     if (!r.ok) {
       ctx.send("log", { line: "Pi 失败，进入 fallback：直接 chat 拉模板。" })

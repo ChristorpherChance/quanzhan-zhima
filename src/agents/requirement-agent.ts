@@ -65,6 +65,7 @@ export async function clarify(
   extra?: string,
 ): Promise<string[]> {
   log("agent", `requirement:clarify project=${ctx.projectId}`)
+  ctx.setPhase("thinking", "分析需求")
   ctx.send("progress", { phase: "clarify", message: "正在分析需求，生成探索性问题..." })
 
   const userMessage = REQUIREMENT_CLARIFY_USER(oneLiner, extra)
@@ -110,6 +111,7 @@ export async function draft(
   answers: Record<string, string>,
 ): Promise<string> {
   log("agent", `requirement:draft project=${ctx.projectId}`)
+  ctx.setPhase("thinking", "生成 PRD 文档")
   ctx.send("progress", { phase: "draft", message: "正在生成 PRD 文档..." })
 
   const userMessage = REQUIREMENT_DRAFT_USER(oneLiner, answers)
@@ -140,6 +142,7 @@ export async function draft(
     }
 
     // 写入文件
+    ctx.setPhase("writing", "写入 PRD 文档")
     const filePath = paths.prd(ctx.projectId)
     await fs.mkdir(dirname(filePath), { recursive: true })
     await fs.writeFile(filePath, content, "utf-8")

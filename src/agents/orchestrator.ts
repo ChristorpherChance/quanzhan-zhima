@@ -3,7 +3,7 @@ import { dirname } from "node:path"
 import { prisma } from "@/lib/db/prisma"
 import { log } from "@/lib/log"
 import { paths } from "@/config/paths"
-import type { AgentRunCtx } from "@/agents/types"
+import type { AgentRunCtx, AgentPhase } from "@/agents/types"
 
 interface JobEvent {
   event: string
@@ -18,11 +18,22 @@ interface StartJobOpts {
   run: (ctx: AgentRunCtx) => Promise<void>
 }
 
+interface PhaseState {
+  phase: AgentPhase
+  label: string
+  tokenIn: number
+  tokenOut: number
+  startedAt: number
+}
+
 // 内存事件缓冲区: jobId -> events[]
 const jobEvents = new Map<string, JobEvent[]>()
 
 // EventTarget 推送: jobId -> EventTarget
 const jobEventTargets = new Map<string, EventTarget>()
+
+// Phase 状态追踪: jobId -> PhaseState
+const jobPhases = new Map<string, PhaseState>()
 
 export function getJobEvents(jobId: string): JobEvent[] {
   return jobEvents.get(jobId) ?? []
@@ -60,6 +71,42 @@ export async function startJob(opts: StartJobOpts) {
 
   const buffer = jobEvents.get(jobId)!
 
+  // 初始化 phase 追踪
+  const phaseState: PhaseState = {
+    phase: "queued",
+    label: "排队中",
+    tokenIn: 0,
+    tokenOut: 0,
+    startedAt: Date.now(),
+  }
+  jobPhases.set(jobId, phaseState)
+
+  const elapsed = () => Date.now() - phaseState.startedAt
+
+  const pushPhase = (phase: AgentPhase, label?: string) => {
+    phaseState.phase = phase
+    if (label) phaseState.label = label
+    const payload = {
+      phase: phaseState.phase,
+      label: phaseState.label,
+      tokenIn: phaseState.tokenIn,
+      tokenOut: phaseState.tokenOut,
+      elapsedMs: elapsed(),
+    }
+    const entry: JobEvent = { event: "phase", data: payload, ts: new Date().toISOString() }
+    buffer.push(entry)
+    if (buffer.length > 500) buffer.splice(0, buffer.length - 500)
+    const target = jobEventTargets.get(jobId)
+    if (target) {
+      target.dispatchEvent(new CustomEvent("job-event", { detail: entry }))
+    }
+    // 异步更新 Job.meta（不阻塞主流程）
+    prisma.job.update({ where: { id: jobId }, data: { meta: JSON.stringify(payload) } }).catch(() => {})
+  }
+
+  // 发射初始 queued 事件
+  pushPhase("queued", "排队中")
+
   // 创建 AgentRunCtx
   const ctx: AgentRunCtx = {
     projectId: opts.projectId,
@@ -67,8 +114,14 @@ export async function startJob(opts: StartJobOpts) {
     send: (event: string, data: unknown) => {
       const entry: JobEvent = { event, data, ts: new Date().toISOString() }
       buffer.push(entry)
-      if (buffer.length > 1000) {
-        buffer.splice(0, buffer.length - 1000)
+      if (buffer.length > 500) {
+        const dropped = buffer.length - 500
+        buffer.splice(0, dropped)
+        // 通知客户端有事件被丢弃
+        const target = jobEventTargets.get(jobId)
+        if (target) {
+          target.dispatchEvent(new CustomEvent("job-event", { detail: { event: "dropped", data: { count: dropped }, ts: new Date().toISOString() } }))
+        }
       }
       // 推送到 EventTarget
       const target = jobEventTargets.get(jobId)
@@ -77,14 +130,22 @@ export async function startJob(opts: StartJobOpts) {
       }
       log("agent", `orchestrator:event job=${jobId} event=${event}`)
     },
+    setPhase: (phase: AgentPhase, label?: string) => pushPhase(phase, label),
+    addTokens: (tokensIn: number, tokensOut: number) => {
+      phaseState.tokenIn += tokensIn
+      phaseState.tokenOut += tokensOut
+    },
   }
 
   // 异步执行 run
   const executionPromise = (async () => {
     try {
       log("agent", `orchestrator:run-start job=${jobId}`)
+      pushPhase("thinking", "开始思考")
       await opts.run(ctx)
       log("agent", `orchestrator:run-success job=${jobId}`)
+
+      pushPhase("done", "完成")
 
       // 更新 Job 状态为成功
       const logs = buffer.map((e) => `[${e.ts}][${e.event}] ${JSON.stringify(e.data)}`).join("\n")
@@ -94,6 +155,8 @@ export async function startJob(opts: StartJobOpts) {
           status: "succeeded",
           logs,
           endedAt: new Date(),
+          costTokens: phaseState.tokenIn + phaseState.tokenOut,
+          meta: JSON.stringify({ phase: phaseState.phase, label: phaseState.label, tokenIn: phaseState.tokenIn, tokenOut: phaseState.tokenOut, elapsedMs: elapsed() }),
         },
       })
 
@@ -102,6 +165,8 @@ export async function startJob(opts: StartJobOpts) {
     } catch (e: unknown) {
       const msg = String((e as Error)?.message ?? e)
       log("agent", `orchestrator:run-fail job=${jobId} error=${msg}`)
+
+      pushPhase("error", msg.slice(0, 100))
 
       // 发送错误事件（如果还没有被发送）
       ctx.send("error", { code: "E_JOB_FAILED", message: msg })
@@ -115,15 +180,19 @@ export async function startJob(opts: StartJobOpts) {
           logs,
           errorMsg: msg,
           endedAt: new Date(),
+          costTokens: phaseState.tokenIn + phaseState.tokenOut,
+          meta: JSON.stringify({ phase: "error", label: msg.slice(0, 100), tokenIn: phaseState.tokenIn, tokenOut: phaseState.tokenOut, elapsedMs: elapsed() }),
         },
       })
 
       // 追加变更日志
       void appendChangelog(opts.projectId, `Job ${opts.agentType}/${opts.type} 执行失败: ${msg}`)
     } finally {
-      // Job 完成后延迟清理 EventTarget（给 SSE 连接时间收尾）
+      // Job 完成后延迟清理 EventTarget 和 event buffer（给 SSE 连接时间收尾）
       setTimeout(() => {
         jobEventTargets.delete(jobId)
+        jobEvents.delete(jobId)
+        jobPhases.delete(jobId)
       }, 30_000)
     }
   })()

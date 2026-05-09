@@ -6,11 +6,12 @@ export interface LlmProviderCfg {
   baseURL?: string
   envKey: string
   enabled: boolean
+  maxTokens?: number
   notes?: string
 }
 
 export const LLM_CONFIG: Record<LlmProviderKey, LlmProviderCfg> = {
-  deepseek: { provider: "openai-compatible", model: "deepseek-v4-pro", baseURL: "https://api.deepseek.com/v1", envKey: "DEEPSEEK_API_KEY", enabled: true, notes: "主用" },
+  deepseek: { provider: "openai-compatible", model: "deepseek-chat", baseURL: "https://api.deepseek.com/v1", envKey: "DEEPSEEK_API_KEY", enabled: true, maxTokens: 8192, notes: "主用" },
   opus:     { provider: "anthropic", model: "claude-opus-4-20250514", envKey: "ANTHROPIC_API_KEY", enabled: false, notes: "扩展位 · 深推理" },
   kimi:     { provider: "openai-compatible", model: "moonshot-v1-128k", baseURL: "https://api.moonshot.cn/v1", envKey: "KIMI_API_KEY", enabled: false, notes: "扩展位" },
   xiaomi:   { provider: "openai-compatible", model: "milm-pro", baseURL: "https://api.mi.com/openai/v1", envKey: "XIAOMI_API_KEY", enabled: false, notes: "扩展位" },

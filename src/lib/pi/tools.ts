@@ -20,6 +20,10 @@ const WorkspaceListParams = Type.Object({
   dir: Type.Optional(Type.String({ description: "Subdirectory to list (relative to workspace root)" })),
 })
 
+const UiTemplatePackParams = Type.Object({
+  pageType: Type.String({ description: "Page type: dashboard, list, detail, settings, modal, toast, skeleton, form" }),
+})
+
 // ── Build options ─────────────────────────────────────────────────
 
 export interface BuildPiCustomToolsOptions {
@@ -205,5 +209,40 @@ export function buildPiCustomTools(
     },
   }
 
-  return [readArtifactTool, workspaceWriteTool, workspaceListTool]
+  // ── Tool: ui_template_pack ─────────────────────────────────────
+  const uiTemplatePackTool: ToolDefinition<typeof UiTemplatePackParams> = {
+    name: "ui_template_pack",
+    label: "UI Template Pack",
+    description:
+      "Get a boilerplate HTML template for a specific page type (dashboard, list, detail, settings, modal, toast, skeleton, form). Each template uses Tailwind CSS + Alpine.js and implements common interaction patterns. Use this to seed page structure before filling in PRD-specific content.",
+    parameters: UiTemplatePackParams,
+    execute: async (
+      _toolCallId: string,
+      params: Static<typeof UiTemplatePackParams>,
+      _signal: AbortSignal | undefined,
+      _onUpdate: AgentToolUpdateCallback | undefined,
+      _ctx: ExtensionContext,
+    ): Promise<AgentToolResult<undefined>> => {
+      try {
+        const { UI_TEMPLATES } = await import("./ui-templates")
+        const template = UI_TEMPLATES[params.pageType]
+        if (!template) {
+          return {
+            content: [{ type: "text", text: `Unknown page type: ${params.pageType}. Available: ${Object.keys(UI_TEMPLATES).join(", ")}` }],
+            details: undefined,
+            terminate: false,
+          }
+        }
+        return {
+          content: [{ type: "text", text: template }],
+          details: undefined,
+          terminate: false,
+        }
+      } catch (e: unknown) {
+        return toolErr(`ui_template_pack: ${(e as Error)?.message ?? e}`)
+      }
+    },
+  }
+
+  return [readArtifactTool, workspaceWriteTool, workspaceListTool, uiTemplatePackTool]
 }
