@@ -114,6 +114,7 @@ async function loadPriorContext(projectId: string, currentSubtype: string): Prom
 async function streamWithMessages(
   ctx: AgentRunCtx,
   messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
+  onDelta?: (delta: string, cumulativeBytes: number) => void,
 ): Promise<string> {
   const streamGen = stream({
     task: "reason-heavy",
@@ -125,6 +126,7 @@ async function streamWithMessages(
     if (event.type === "delta" && event.text) {
       buf += event.text
       ctx.send("text_delta", { text: event.text })
+      onDelta?.(event.text, buf.length)
     } else if (event.type === "error") {
       throw new Error(event.error ?? "stream error")
     }
@@ -140,6 +142,7 @@ async function streamOnceWithContinuation(
   firstUser: string,
   endRe: RegExp,
   maxTries = 5,
+  onDelta?: (delta: string, cumulativeBytes: number) => void,
 ): Promise<string> {
   let buf = ""
   let messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
@@ -147,7 +150,7 @@ async function streamOnceWithContinuation(
     { role: "user", content: firstUser },
   ]
   for (let i = 0; i < maxTries; i++) {
-    const piece = await streamWithMessages(ctx, messages)
+    const piece = await streamWithMessages(ctx, messages, onDelta)
     buf += piece
     if (endRe.test(buf)) break
     // 续写：assistant 追加 buffer，user 只说"继续"
@@ -208,6 +211,10 @@ async function generateUi(ctx: AgentRunCtx, projectId: string): Promise<string> 
     UI_SHELL_PROMPT,
     `PRD:\n${prdContent.slice(0, 8000)}\n\n请生成 HTML 骨架。`,
     /<!--\s*END:ui-shell\s*-->/,
+    5,
+    (delta, cumulativeBytes) => {
+      ctx.send("progress", { phase: "design-ui-stream", subPhase: "ui-shell", delta, cumulativeBytes })
+    },
   )
 
   // 2. 6 页面
@@ -226,6 +233,10 @@ async function generateUi(ctx: AgentRunCtx, projectId: string): Promise<string> 
       UI_PAGE_PROMPT(p),
       userMsg,
       new RegExp(`<!--\\s*END:ui-${p}\\s*-->`),
+      5,
+      (delta, cumulativeBytes) => {
+        ctx.send("progress", { phase: "design-ui-stream", subPhase: `ui-${p}`, delta, cumulativeBytes })
+      },
     )
     pageBlocks.push(block)
   }
@@ -294,6 +305,7 @@ export async function generate(
       // K6: 切 Pi 生成
       const cfg = await loadAgentConfig("design")
       let piOk = false
+      let piReason = ""
 
       try {
         const r = await runPiSession({
@@ -328,12 +340,14 @@ export async function generate(
           try {
             content = await fs.readFile(join(workspaceDir, `${subtype}.${outputExt}`), "utf-8")
           } catch { content = "" }
+        } else {
+          piReason = r.error ?? "session 不可用"
         }
-      } catch { /* Pi 失败，回退到流式 */ }
+      } catch (e: unknown) { piReason = (e as Error)?.message ?? String(e) }
 
       // Pi 失败时回退到 gateway.stream()
       if (!piOk || !content) {
-        ctx.send("log", { line: `Pi 不可用，回退到传统流式生成 ${subtype}` })
+        ctx.send("log", { line: `Pi 不可用（原因：${piReason || "未知"}），本轮 ${subtype} 临时走 Gateway 流式。下一个 subtype 会重试 Pi。` })
         let userMessageFallback = prdContent
         if (priorContext) {
           userMessageFallback = `PRD 内容:\n\n${prdContent}\n\n---\n\n前置设计产物:\n\n${priorContext}\n\n请基于以上上下文生成 ${subtype} 设计。`
@@ -452,6 +466,7 @@ export async function edit(
     const cfg = await loadAgentConfig("design")
     let content = ""
     let piOk = false
+    let piReason = ""
 
     try {
       const r = await runPiSession({
@@ -472,12 +487,14 @@ export async function edit(
       piOk = r.ok
       if (r.ok) {
         try { content = await fs.readFile(join(workspaceDir, `${subtype}.${outputExt}`), "utf-8") } catch { content = "" }
+      } else {
+        piReason = r.error ?? "session 不可用"
       }
-    } catch { /* Pi 失败 */ }
+    } catch (e: unknown) { piReason = (e as Error)?.message ?? String(e) }
 
     // Fallback to gateway.stream()
     if (!piOk || !content) {
-      ctx.send("log", { line: `Pi 不可用，回退到传统流式编辑 ${subtype}` })
+      ctx.send("log", { line: `Pi 不可用（原因：${piReason || "未知"}），本轮 ${subtype} 临时走 Gateway 流式编辑。` })
       const contextParts: string[] = []
       if (prdContent) contextParts.push(`PRD 内容:\n\n${prdContent}`)
       if (existingContent) contextParts.push(`当前设计产出:\n\n${existingContent}`)

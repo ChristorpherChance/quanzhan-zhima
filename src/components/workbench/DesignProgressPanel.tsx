@@ -1,6 +1,6 @@
 "use client"
 
-import { Check, X, Loader2, Clock } from "lucide-react"
+import { Check, X, Loader2, Clock, RefreshCw } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 export interface DesignStepProgress {
@@ -15,6 +15,7 @@ interface Props {
   steps: DesignStepProgress[]
   totalMs?: number
   summary?: string
+  onRetry?: (stepKey: string) => void
 }
 
 function formatElapsed(ms: number): string {
@@ -52,7 +53,7 @@ function stepLabelClass(status: string) {
   )
 }
 
-export function DesignProgressPanel({ steps, totalMs, summary }: Props) {
+export function DesignProgressPanel({ steps, totalMs, summary, onRetry }: Props) {
   const hasRunning = steps.some((s) => s.status === "running")
 
   return (
@@ -100,6 +101,16 @@ export function DesignProgressPanel({ steps, totalMs, summary }: Props) {
                 {step.error}
               </span>
             )}
+            {step.status === "failed" && onRetry && (
+              <button
+                type="button"
+                className="ml-auto p-1 rounded hover:bg-red-100 dark:hover:bg-red-900/30 text-red-600"
+                title="重试此步"
+                onClick={() => onRetry(step.key)}
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+              </button>
+            )}
             {step.status === "running" && (
               <span className="text-blue-600 dark:text-blue-400 animate-pulse text-[10px]">
                 生成中...
@@ -114,9 +125,9 @@ export function DesignProgressPanel({ steps, totalMs, summary }: Props) {
 
 const DESIGN_STEP_DEFS = [
   { key: "summary", label: "概要设计" },
+  { key: "detail", label: "详细设计" },
   { key: "api", label: "接口设计" },
   { key: "db", label: "数据库设计" },
-  { key: "detail", label: "详细设计" },
   { key: "ui", label: "UI原型" },
 ]
 

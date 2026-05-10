@@ -16,9 +16,9 @@ import { Wand2, SkipForward, Lock, Check } from "lucide-react"
 
 const DESIGN_STEPS = [
   { key: "summary", label: "概要设计", artifactType: "design-summary" as const },
+  { key: "detail", label: "详细设计", artifactType: "design-detail" as const },
   { key: "api", label: "接口设计", artifactType: "design-api" as const },
   { key: "db", label: "数据库设计", artifactType: "design-db" as const },
-  { key: "detail", label: "详细设计", artifactType: "design-detail" as const },
   { key: "ui", label: "UI原型", artifactType: "design-ui" as const },
 ]
 
@@ -52,6 +52,10 @@ export default function DesignPage() {
   const [draftReady, setDraftReady] = useState(false)
   const [designAllSteps, setDesignAllSteps] = useState<DesignStepProgress[]>(createInitialSteps())
   const [designAllTotalMs, setDesignAllTotalMs] = useState<number | undefined>()
+  const [shellBuffer, setShellBuffer] = useState("")
+  const [pageBuffers, setPageBuffers] = useState<Record<string, string>>({})
+  const [previewHtml, setPreviewHtml] = useState("")
+  const previewThrottleRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const chatRef = useRef<AgentChatHandle>(null)
   const autoChainRef = useRef(false)
   const autoChainStepRef = useRef(0)
@@ -139,43 +143,33 @@ export default function DesignPage() {
     setJobId(null)
 
     if (autoChainRef.current) {
-      // 一键生成模式 (generate-all)：后端已完成全部5步，重新加载所有产物并标记完成
       autoChainRef.current = false
-      ;(async () => {
-        const results: Array<{ key: string; ok: boolean }> = []
-        for (const s of DESIGN_STEPS) {
-          try {
-            const r = await fetch(`/api/projects/${pid}/artifacts/${s.artifactType}`)
-            const { data } = await r.json()
+      // 一键生成模式：根据 designAllSteps 状态汇总结果
+      let okCount = 0
+      for (const s of DESIGN_STEPS) {
+        const ps = designAllSteps.find((d) => d.key === s.key)
+        if (ps?.status === "done") okCount++
+        // 加载产物内容
+        fetch(`/api/projects/${pid}/artifacts/${s.artifactType}`)
+          .then((r) => r.json())
+          .then(({ data }) => {
             if (data?.content) {
               setContents((prev) => ({ ...prev, [s.key]: data.content }))
               setArtifactVersions((prev) => ({ ...prev, [s.key]: data.version ?? 1 }))
-              // 自动锁稿
-              await fetch(`/api/projects/${pid}/artifacts/${s.artifactType}/confirm`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ content: data.content }),
-              }).catch(() => {})
-              results.push({ key: s.key, ok: true })
-            } else {
-              results.push({ key: s.key, ok: false })
             }
-          } catch {
-            results.push({ key: s.key, ok: false })
-          }
+          })
+          .catch(() => {})
+      }
+      setStepStates((prev) => {
+        const next = [...prev]
+        for (let i = 0; i < DESIGN_STEPS.length; i++) {
+          const ps = designAllSteps.find((d) => d.key === DESIGN_STEPS[i].key)
+          next[i] = ps?.status === "done" ? "locked" : ps?.status === "failed" ? "pending" : "draft"
         }
-        setStepStates((prev) => {
-          const next = [...prev]
-          for (let i = 0; i < DESIGN_STEPS.length; i++) {
-            next[i] = results[i]?.ok ? "locked" : "draft"
-          }
-          return next
-        })
-        const okCount = results.filter((r) => r.ok).length
-        toast({ title: `一键生成完成: ${okCount}/${DESIGN_STEPS.length} 成功` })
-      })()
+        return next
+      })
+      toast({ title: `一键生成完成: ${okCount}/${DESIGN_STEPS.length} 成功` })
     } else {
-      // 手动对话模式：等待用户确认
       setDraftReady(true)
       setStepStates((prev) => {
         const next = [...prev]
@@ -183,7 +177,7 @@ export default function DesignPage() {
         return next
       })
     }
-  }, [currentStep, pid])
+  }, [currentStep, pid, designAllSteps])
 
   const handleConfirmDraft = useCallback(() => {
     const stepKey = DESIGN_STEPS[currentStep].key
@@ -354,23 +348,80 @@ export default function DesignPage() {
   const allDone = stepStates.every((s) => s === "locked" || s === "skipped")
 
   const handleProgress = useCallback((data: {
-    step?: number; total?: number; subtype?: string; done?: boolean; failed?: boolean; message?: string; elapsedMs?: number
+    phase?: string; step?: number; total?: number; subtype?: string; done?: boolean; failed?: boolean
+    message?: string; elapsedMs?: number; results?: Record<string, string>
+    subPhase?: string; delta?: string; cumulativeBytes?: number
   }) => {
-    if (data.subtype && data.step != null) {
-      setDesignAllSteps((prev) => {
-        const next = [...prev]
-        if (next[data.step!]) {
-          next[data.step!] = {
-            ...next[data.step!],
-            status: data.done ? "done" : data.failed ? "failed" : "running",
-            elapsedMs: data.elapsedMs,
-            error: data.failed ? data.message : undefined,
-          }
-        }
-        return next
-      })
+    const phase = data.phase ?? ""
+    if (phase === "design-plan") {
+      setDesignAllSteps(createInitialSteps())
+      setDesignAllTotalMs(undefined)
+      setShellBuffer("")
+      setPageBuffers({})
+      setPreviewHtml("")
+    } else if (phase === "design-step-start" && data.subtype != null) {
+      const idx = DESIGN_STEPS.findIndex((s) => s.key === data.subtype)
+      if (idx >= 0) {
+        setDesignAllSteps((prev) => {
+          const next = [...prev]
+          next[idx] = { ...next[idx], status: "running" }
+          return next
+        })
+      }
+    } else if (phase === "design-step-done" && data.subtype != null) {
+      const idx = DESIGN_STEPS.findIndex((s) => s.key === data.subtype)
+      if (idx >= 0) {
+        setDesignAllSteps((prev) => {
+          const next = [...prev]
+          next[idx] = { ...next[idx], status: "done", elapsedMs: data.elapsedMs }
+          return next
+        })
+      }
+      // UI 完成时拉最终 artifact 覆盖预览
+      if (data.subtype === "ui") {
+        fetch(`/api/projects/${pid}/artifacts/design-ui`)
+          .then((r) => r.json())
+          .then(({ data: d }) => { if (d?.content) setPreviewHtml(d.content) })
+          .catch(() => {})
+      }
+    } else if (phase === "design-step-failed" && data.subtype != null) {
+      const idx = DESIGN_STEPS.findIndex((s) => s.key === data.subtype)
+      if (idx >= 0) {
+        setDesignAllSteps((prev) => {
+          const next = [...prev]
+          next[idx] = { ...next[idx], status: "failed", error: data.message }
+          return next
+        })
+      }
+    } else if (phase === "design-ui-stream" && data.subPhase && data.delta != null) {
+      // 将 delta 按 subPhase 分类写入 shellBuffer 或 pageBuffers
+      const sp = data.subPhase
+      if (sp === "ui-shell") {
+        setShellBuffer((prev) => prev + data.delta!)
+      } else {
+        const pageKey = sp.replace(/^ui-/, "")
+        setPageBuffers((prev) => ({ ...prev, [pageKey]: (prev[pageKey] ?? "") + data.delta! }))
+      }
+      // throttle 200ms 合成 iframe srcdoc
+      if (previewThrottleRef.current) clearTimeout(previewThrottleRef.current)
+      previewThrottleRef.current = setTimeout(() => {
+        setShellBuffer((shell) => {
+          setPageBuffers((pages) => {
+            const allPages = Object.values(pages).join("\n\n")
+            const assembled = shell.replace(
+              '<main id="page-root"></main>',
+              `<main id="page-root">\n${allPages}\n</main>`,
+            )
+            setPreviewHtml(assembled)
+            return pages
+          })
+          return shell
+        })
+      }, 200)
+    } else if (phase === "result" && data.results) {
+      if (data.elapsedMs != null) setDesignAllTotalMs(data.elapsedMs)
     }
-  }, [])
+  }, [pid])
 
   const handleOneClick = () => {
     autoChainRef.current = true
@@ -437,10 +488,26 @@ export default function DesignPage() {
           <div className="flex-1 overflow-auto">
             {/* 一键生成进度面板 */}
             {autoChainRef.current && (
-              <DesignProgressPanel
-                steps={designAllSteps}
-                totalMs={designAllTotalMs}
-              />
+              <>
+                <DesignProgressPanel
+                  steps={designAllSteps}
+                  totalMs={designAllTotalMs}
+                  onRetry={(stepKey) => {
+                    // 重试单个失败步骤
+                    handleGenerate(stepKey)
+                  }}
+                />
+                {previewHtml && (
+                  <div className="mx-4 mb-3 border rounded-lg overflow-hidden" style={{ height: 420 }}>
+                    <iframe
+                      className="w-full h-full"
+                      srcDoc={previewHtml}
+                      title="UI 原型实时预览"
+                      sandbox="allow-scripts allow-same-origin"
+                    />
+                  </div>
+                )}
+              </>
             )}
             <ArtifactViewer
               content={contents[currentStepDef.key] ?? null}

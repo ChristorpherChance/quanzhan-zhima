@@ -11,6 +11,8 @@ const LABELS: Record<string, string> = {
   summary: "概要设计", detail: "详细设计", api: "接口设计", db: "数据库设计", ui: "UI原型",
 }
 
+type StepResult = "pending" | "running" | "done" | "failed"
+
 export const POST = withErrorBoundary(async (
   _req: NextRequest,
   { params }: { params: { id: string } },
@@ -22,56 +24,50 @@ export const POST = withErrorBoundary(async (
     agentType: "design",
     type: "design-gen-all",
     run: async (ctx: AgentRunCtx) => {
-      const results: Array<{ subtype: string; ok: boolean; length: number; error?: string }> = []
+      const results: Record<string, StepResult> = Object.fromEntries(
+        DESIGN_ORDER.map((s) => [s, "pending"]),
+      ) as Record<string, StepResult>
       const startAll = Date.now()
+
+      ctx.send("progress", { phase: "design-plan", subtypes: DESIGN_ORDER, results })
 
       for (let i = 0; i < DESIGN_ORDER.length; i++) {
         const subtype = DESIGN_ORDER[i]
         const label = LABELS[subtype] ?? subtype
-        ctx.setPhase("thinking", `生成 ${label} (${i + 1}/5)`)
-        ctx.send("progress", {
-          phase: `design-gen-all`,
-          message: `[${i + 1}/5] 正在生成 ${label}...`,
-          step: i,
-          total: 5,
-          subtype,
-        })
+        results[subtype] = "running"
+        ctx.send("progress", { phase: "design-step-start", subtype, results, step: i, total: 5 })
 
         const t0 = Date.now()
         try {
           const content = await generate(ctx, subtype)
-          results.push({ subtype, ok: true, length: content.length })
+          results[subtype] = "done"
           ctx.send("progress", {
-            phase: `design-gen-all`,
-            message: `[${i + 1}/5] ${label} 完成 (${((Date.now() - t0) / 1000).toFixed(0)}s, ${content.length} 字符)`,
+            phase: "design-step-done",
+            subtype,
+            results,
             step: i,
             total: 5,
-            subtype,
-            done: true,
             elapsedMs: Date.now() - t0,
+            message: `${label} 完成 (${((Date.now() - t0) / 1000).toFixed(0)}s, ${content.length} 字符)`,
           })
         } catch (e: unknown) {
           const msg = String((e as Error)?.message ?? e)
-          results.push({ subtype, ok: false, length: 0, error: msg })
+          results[subtype] = "failed"
           ctx.send("progress", {
-            phase: `design-gen-all`,
-            message: `[${i + 1}/5] ${label} 失败: ${msg}`,
+            phase: "design-step-failed",
+            subtype,
+            results,
             step: i,
             total: 5,
-            subtype,
-            failed: true,
             elapsedMs: Date.now() - t0,
+            message: msg,
           })
-          // 失败不中断，继续执行后续步骤
+          throw e // 前一步失败立即停，后续不跳
         }
       }
 
       const totalMs = Date.now() - startAll
-      ctx.send("result", {
-        results,
-        totalMs,
-        summary: `${results.filter((r) => r.ok).length}/${DESIGN_ORDER.length} 成功，总耗时 ${(totalMs / 1000).toFixed(0)}s`,
-      })
+      ctx.send("result", { results, totalMs })
     },
   })
 
