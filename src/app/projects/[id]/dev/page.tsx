@@ -143,12 +143,18 @@ export default function DevPage() {
 
   const handleLockG3 = async () => {
     try {
-      const r = await fetch(`/api/projects/${pid}/stages/G3/complete`, { method: "POST" })
+      const r = await fetch(`/api/projects/${pid}/dev/confirm`, { method: "POST" })
+      const body = await r.json()
       if (!r.ok) {
-        const { error } = await r.json()
-        toast({ title: "G3 锁定失败", description: error?.message ?? "", variant: "destructive" })
+        const reasons = (body.reasons as string[]) ?? []
+        const warnings = (body.warnings as string[]) ?? []
+        const desc = [...reasons, ...warnings.map((w) => `⚠ ${w}`)].join("\n")
+        toast({ title: "开发完成检查未通过", description: desc || body.error || "未知错误", variant: "destructive" })
       } else {
-        toast({ title: "开发阶段已锁定" })
+        const warnings = (body.warnings as string[]) ?? []
+        const title = warnings.length > 0 ? "开发阶段已锁定（含警告）" : "开发阶段已锁定"
+        const desc = warnings.length > 0 ? warnings.map((w) => `⚠ ${w}`).join("\n") : undefined
+        toast({ title, description: desc })
         const pr = await fetch(`/api/projects/${pid}`).then((r) => r.json())
         setGates(pr?.data?.gates ?? [])
       }

@@ -58,12 +58,13 @@ async function checkConditions(
                      existsSync(`${ws}/server.js`) ||
                      existsSync(`${ws}/package.json`)
     if (!hasEntry) reasons.push("工作区缺少入口文件")
-    // J8: 必须构建成功才能锁定 G3
+    // J2: 软化 builtOk — 仅缺失时 hard-block，失败仅 warning
     if (code?.meta) {
       try {
         const meta = JSON.parse(code.meta as string)
-        if (meta.builtOk === false) reasons.push("代码构建未通过 (builtOk=false)")
-      } catch { /* meta 解析失败则跳过此检查 */ }
+        if (meta.builtOk === undefined) reasons.push("未执行构建自检")
+        // builtOk === false 不阻断，由 confirm 路由透传 warning
+      } catch { /* meta 解析失败则跳过 */ }
     }
   } else if (gate === "G4") {
     // G4 审查→导出：审查报告已生成且无 P0 缺陷

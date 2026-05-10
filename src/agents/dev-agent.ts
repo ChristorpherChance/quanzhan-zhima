@@ -100,18 +100,27 @@ export async function runDev(ctx: AgentRunCtx, instruction?: string): Promise<vo
 
   // J3.3: 构建自检 — 仅当 Pi 成功时执行
   let builtOk = false
+  let buildLogPath: string | undefined
   if (piOk) {
     ctx.setPhase("reviewing", "构建自检")
     ctx.send("log", { line: "--- 构建自检 ---" })
 
+    let buildLog = ""
+
     const install = execIn(workspaceDir, "pnpm install --no-frozen-lockfile 2>&1", 10 * 60_000)
+    buildLog += `$ pnpm install --no-frozen-lockfile\n${install.out}\n\n`
     ctx.send("log", { line: install.ok ? "✓ pnpm install" : `✗ pnpm install:\n${install.out.slice(-1500)}` })
 
     if (install.ok) {
       const build = execIn(workspaceDir, "pnpm exec next build 2>&1 || pnpm exec tsc --noEmit 2>&1", 10 * 60_000)
       builtOk = build.ok
+      buildLog += `$ pnpm exec next build 2>&1 || pnpm exec tsc --noEmit 2>&1\n${build.out}\n`
       ctx.send("log", { line: build.ok ? "✓ build" : `✗ build:\n${build.out.slice(-1500)}` })
     }
+
+    // J2.3: 写 build.log
+    await fs.writeFile(`${workspaceDir}/build.log`, buildLog, "utf-8").catch(() => {})
+    buildLogPath = `${workspaceDir}/build.log`
   }
 
   // J3.4: AC 覆盖率
@@ -144,7 +153,7 @@ export async function runDev(ctx: AgentRunCtx, instruction?: string): Promise<vo
   })
   let filesCount = 0
   try { filesCount = (await fs.readdir(workspaceDir)).length } catch { /* ignore */ }
-  const meta = { entry: "index.html", filesCount, builtOk, coverage, selfReview: selfReviewTotal > 0 ? { pass: selfReviewPass, total: selfReviewTotal } : null }
+  const meta = { entry: "index.html", filesCount, builtOk, coverage, buildLogPath, selfReview: selfReviewTotal > 0 ? { pass: selfReviewPass, total: selfReviewTotal } : null }
 
   if (existing && !existing.locked) {
     await prisma.artifact.update({
