@@ -17,8 +17,7 @@ export function StackBlitzEmbed({ projectId, className }: StackBlitzEmbedProps) 
     setLoading(true)
     setError(null)
     try {
-      // 动态加载 SDK，未安装时自动隐藏功能
-      // @ts-ignore @stackblitz/sdk 为可选依赖
+      // 动态加载 SDK，加载失败时自动隐藏功能
       const sdk = await import("@stackblitz/sdk").catch(() => null)
       if (!sdk) {
         setError("StackBlitz SDK 未安装，请使用下载 zip 或代码浏览器")
