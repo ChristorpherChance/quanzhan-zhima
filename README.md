@@ -133,6 +133,10 @@ src/
 原因：PRD 已锁定（只读状态）。
 解决：右上角会显示「PRD 已锁定（只读）」提示。如需解锁，管理员可通过 API 手动解锁。
 
+### 端口被占用
+
+如 3000 被占用，设 `APP_PORT=3001` 重起；沙箱范围调 `SANDBOX_PORT_RANGE`（默认 3010–3099），UI 预览范围调 `UI_PREVIEW_PORT_RANGE`（默认 3100–3199），详见 `.env.example`。
+
 ### 使用本地 Ollama 模型
 
 1. 启动 Ollama：`ollama serve`

@@ -1,14 +1,15 @@
 import { headers } from "next/headers"
 import { redirect } from "next/navigation"
+import { PORTS } from "@/config/ports"
 
 function getBaseUrl(): string {
   try {
     const h = headers()
-    const host = h.get("host") || h.get("x-forwarded-host") || "localhost:3002"
+    const host = h.get("host") || h.get("x-forwarded-host") || `localhost:${PORTS.app}`
     const proto = h.get("x-forwarded-proto") || "http"
     return `${proto}://${host}`
   } catch {
-    return "http://localhost:3002"
+    return `http://localhost:${PORTS.app}`
   }
 }
 

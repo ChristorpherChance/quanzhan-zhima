@@ -1,15 +1,43 @@
-import { SANDBOX_PORT_RANGE } from "@/config/ports"
+import net from "node:net"
+import { PORTS } from "@/config/ports"
 
 const used = new Set<number>()
 
-export function acquirePort(): number {
-  for (let p = SANDBOX_PORT_RANGE[0]; p <= SANDBOX_PORT_RANGE[1]; p++) {
-    if (!used.has(p)) {
-      used.add(p)
-      return p
+function rangeFor(kind: "sandbox" | "uiPreview" | "reviewE2E"): [number, number] {
+  return PORTS[kind]
+}
+
+async function isFree(port: number, host = "127.0.0.1", timeout = 300): Promise<boolean> {
+  return new Promise((resolve) => {
+    const sock = new net.Socket()
+    const done = (free: boolean) => {
+      sock.destroy()
+      resolve(free)
     }
+    sock.setTimeout(timeout)
+    sock.once("connect", () => done(false))
+    sock.once("timeout", () => done(true))
+    sock.once("error", () => done(true))
+    sock.connect(port, host)
+  })
+}
+
+export async function acquirePort(
+  kind: "sandbox" | "uiPreview" | "reviewE2E" = "sandbox",
+): Promise<number> {
+  const [start, end] = rangeFor(kind)
+  let attempts = 0
+  for (let p = start; p <= end; p++) {
+    if (used.has(p)) continue
+    if (!(await isFree(p))) {
+      attempts++
+      if (attempts > 5) break
+      continue
+    }
+    used.add(p)
+    return p
   }
-  throw new Error("no free port in sandbox range")
+  throw new Error(`E_NO_PORT: 端口范围 ${start}-${end} 无可用端口`)
 }
 
 export function releasePort(p: number) {

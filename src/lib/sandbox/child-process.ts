@@ -35,7 +35,7 @@ export async function startChild(opts: SandboxStartOpts): Promise<SandboxHandle>
   const exists = registry.get(opts.projectId)
   if (exists) return exists
 
-  const port = acquirePort()
+  const port = await acquirePort("sandbox")
   const isWindows = process.platform === "win32"
   log("sandbox", `start: project=${opts.projectId} port=${port} cmd=${opts.command} cwd=${opts.workspaceDir}`)
 

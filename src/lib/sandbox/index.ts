@@ -1,6 +1,7 @@
 import { startChild, getRunning } from "./child-process"
 import type { SandboxHandle, SandboxStartOpts } from "./types"
 import { existsSync, readFileSync } from "node:fs"
+import { PORTS } from "@/config/ports"
 
 export async function startSandbox(opts: SandboxStartOpts): Promise<SandboxHandle> {
   const exists = getRunning(opts.projectId)
@@ -39,7 +40,7 @@ export function detectStartCommand(workspaceDir: string): StartCommands {
         install: "pnpm install --no-frozen-lockfile",
         build: "pnpm exec next build",
         start: "pnpm exec next start -p $PORT",
-        port: 3100,
+        port: PORTS.uiPreview[0],
       }
     }
     if (hasVite) {
@@ -47,7 +48,7 @@ export function detectStartCommand(workspaceDir: string): StartCommands {
         install: "pnpm install --no-frozen-lockfile",
         build: "pnpm exec vite build",
         start: "pnpm exec vite preview --host 0.0.0.0 --port $PORT",
-        port: 3100,
+        port: PORTS.uiPreview[0],
       }
     }
     // 通用 npm start / dev
@@ -57,7 +58,7 @@ export function detectStartCommand(workspaceDir: string): StartCommands {
       return {
         install: "pnpm install --no-frozen-lockfile",
         start: portIncluded ? startScript : `${startScript} -- --port $PORT`,
-        port: 3100,
+        port: PORTS.uiPreview[0],
       }
     }
     if (pkg.scripts?.dev) {
@@ -66,7 +67,7 @@ export function detectStartCommand(workspaceDir: string): StartCommands {
         start: pkg.scripts.dev.includes("$PORT")
           ? pkg.scripts.dev
           : `${pkg.scripts.dev} -- --port $PORT`,
-        port: 3100,
+        port: PORTS.uiPreview[0],
       }
     }
   }
@@ -76,10 +77,10 @@ export function detectStartCommand(workspaceDir: string): StartCommands {
     return {
       install: "",
       start: "node $SKELETON_SERVER", // 由调用方替换为实际 server.js 路径
-      port: 3100,
+      port: PORTS.uiPreview[0],
     }
   }
 
   // 最后兜底
-  return { install: "", start: "node server.js", port: 3100 }
+  return { install: "", start: "node server.js", port: PORTS.uiPreview[0] }
 }

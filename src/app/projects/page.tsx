@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { EggButton } from "@/components/marketing/egg-button"
+import { PORTS } from "@/config/ports"
 
 const STAGE_LABELS: Record<string, string> = {
   requirement: "需求",
@@ -17,11 +18,11 @@ async function getProjects() {
   let base: string
   try {
     const h = headers()
-    const host = h.get("host") || h.get("x-forwarded-host") || "localhost:3002"
+    const host = h.get("host") || h.get("x-forwarded-host") || `localhost:${PORTS.app}`
     const proto = h.get("x-forwarded-proto") || "http"
     base = `${proto}://${host}`
   } catch {
-    base = `http://localhost:${process.env.PORT || 3002}`
+    base = `http://localhost:${PORTS.app}`
   }
   try {
     const controller = new AbortController()
