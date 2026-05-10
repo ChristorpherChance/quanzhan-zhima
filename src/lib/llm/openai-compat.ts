@@ -1,11 +1,13 @@
 import OpenAI from "openai"
 import { AppError } from "@/lib/errors"
+import { clampMaxTokens } from "@/config/models"
 import type { LlmRequest, LlmResponse, LlmStreamEvent } from "./types"
 
 export interface OpenAiCompatOpts {
   baseURL: string
   model: string
   envKey: string
+  maxTokensRange?: { min: number; max: number; default: number }
 }
 
 function getClient(opts: OpenAiCompatOpts): OpenAI {
@@ -22,7 +24,7 @@ export async function chat(
 ): Promise<LlmResponse> {
   const client = getClient(opts)
   const temperature = req.temperature ?? 0.4
-  const maxTokens = req.maxTokens ?? 4096
+  const maxTokens = clampMaxTokens(req.maxTokens, opts.maxTokensRange)
 
   const completion = await client.chat.completions.create({
     model: opts.model,
@@ -55,7 +57,7 @@ export async function* stream(
   }
 
   const temperature = req.temperature ?? 0.4
-  const maxTokens = req.maxTokens ?? 4096
+  const maxTokens = clampMaxTokens(req.maxTokens, opts.maxTokensRange)
 
   try {
     const rawStream = await client.chat.completions.create({

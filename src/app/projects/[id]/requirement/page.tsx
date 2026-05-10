@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react"
 import { useParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { toast } from "@/components/ui/toast"
-import { ArtifactViewer } from "@/components/workbench/artifact-viewer"
+import { PrdEditor } from "@/components/workbench/PrdEditor"
 import { AgentChat, type AgentChatHandle } from "@/components/workbench/agent-chat"
 import { ThreePane } from "@/components/workbench/three-pane"
 import { StageNav } from "@/components/workbench/stage-nav"
@@ -15,6 +15,7 @@ export default function RequirementPage() {
   const params = useParams()
   const pid = params.id as string
   const [prd, setPrd] = useState<string | null>(null)
+  const [prdLocked, setPrdLocked] = useState(false)
   const [loading, setLoading] = useState(false)
   const [jobId, setJobId] = useState<string | null>(null)
   const [project, setProject] = useState<{ currentStage: string; name: string } | null>(null)
@@ -36,6 +37,7 @@ export default function RequirementPage() {
       .then((r) => r.json())
       .then(({ data }) => {
         if (data?.content) setPrd(data.content)
+        if (data?.locked != null) setPrdLocked(data.locked)
       })
       .catch(() => {})
   }, [pid])
@@ -46,6 +48,7 @@ export default function RequirementPage() {
       .then((r) => r.json())
       .then(({ data }) => {
         if (data?.content) setPrd(data.content)
+        if (data?.locked != null) setPrdLocked(data.locked)
       })
       .catch(() => {})
   }, [pid])
@@ -110,6 +113,7 @@ export default function RequirementPage() {
         toast({ title: "锁定失败", description: error?.message ?? "", variant: "destructive" })
       } else {
         toast({ title: "PRD 已锁定", description: "进入设计阶段" })
+        setPrdLocked(true)
         // Reload project to get updated gates
         const pr = await fetch(`/api/projects/${pid}`).then((r) => r.json())
         setGates(pr?.data?.gates ?? [])
@@ -121,6 +125,21 @@ export default function RequirementPage() {
       toast({ title: "锁定失败", description: String((e as Error)?.message ?? e), variant: "destructive" })
     }
   }
+
+  const handlePrdSaved = useCallback(() => {
+    // Auto-save handled by PrdEditor; refresh project info
+    fetch(`/api/projects/${pid}`).then(r => r.json()).then(({ data }) => {
+      if (data?.project) setProject({ currentStage: data.project.currentStage, name: data.project.name })
+    }).catch(() => {})
+  }, [pid])
+
+  const handlePrdLocked = useCallback(() => {
+    setPrdLocked(true)
+    fetch(`/api/projects/${pid}`).then(r => r.json()).then(({ data }) => {
+      setGates(data?.gates ?? [])
+      if (data?.project) setProject({ currentStage: data.project.currentStage, name: data.project.name })
+    }).catch(() => {})
+  }, [pid])
 
   const streamingUrl = jobId ? `/api/jobs/${jobId}/stream` : null
 
@@ -174,7 +193,7 @@ export default function RequirementPage() {
                 </div>
               </div>
             )}
-            <ArtifactViewer content={prd} loading={loading} title="PRD 文档" />
+            <PrdEditor projectId={pid} initialContent={prd ?? ""} locked={prdLocked} onSaved={handlePrdSaved} onLocked={handlePrdLocked} />
           </div>
         </div>
       }

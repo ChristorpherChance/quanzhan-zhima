@@ -1,12 +1,26 @@
 import fs from "node:fs/promises"
+import path from "node:path"
 import { paths } from "@/config/paths"
 
 const SUBTYPES = ["summary", "detail", "api", "db", "ui"] as const
 const MAX_PER_DOC = 12_000
 const MAX_PRD = 16_000
+const ROOT = path.resolve(process.cwd())
+
+let playbookCache: string | null = null
+async function loadPlaybook(): Promise<string> {
+  if (playbookCache) return playbookCache
+  try {
+    playbookCache = await fs.readFile(path.join(ROOT, "src/agents/prompts/dev-playbook.md"), "utf-8")
+  } catch {
+    playbookCache = ""
+  }
+  return playbookCache
+}
 
 export async function buildDevSystemPrompt(projectId: string): Promise<string> {
   const prdRaw = await fs.readFile(paths.prd(projectId), "utf-8").catch(() => "")
+  const playbook = await loadPlaybook()
   const designs: Record<string, string> = {}
   for (const sub of SUBTYPES) {
     const ext = sub === "ui" ? "html" : "md"
@@ -26,6 +40,10 @@ export async function buildDevSystemPrompt(projectId: string): Promise<string> {
 
   return `# 角色
 你是开发 Agent。任务：基于下方 PRD + 设计产物，**在 workspace 目录中产出一个可直接 \`npm run build && npm start\` 的真实应用**，完整覆盖所有 AC。
+
+# 编码 Playbook（硬性约束）
+
+${playbook}
 
 # 红线
 - 必须严格实现 PRD 的全部 AC（不少于 80%），任何被跳过的 AC 在末尾 \`COVERAGE.md\` 中说明原因。
@@ -48,6 +66,7 @@ export async function buildDevSystemPrompt(projectId: string): Promise<string> {
 2. 按顺序 \`workspace_write\` 写文件；写完一组后跑一次 \`workspace_exec pnpm install\` / \`pnpm exec next build\` 自检。
 3. 每次自检失败立即修复；连续 2 次失败需在 PLAN.md 标注 BLOCKED。
 4. 最后写 \`COVERAGE.md\` 列出每条 AC 对应的代码位置。
+5. 最后写 \`SELF_REVIEW.md\` 对照 Playbook 12 节逐节标注 Pass/Fail，Fail 项说明具体违规位置与修复建议。
 
 # 上下文：PRD
 

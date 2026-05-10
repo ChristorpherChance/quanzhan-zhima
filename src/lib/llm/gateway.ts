@@ -7,6 +7,21 @@ import { log } from "@/lib/log"
 import { AppError } from "@/lib/errors"
 import type { LlmRequest, LlmResponse, LlmStreamEvent } from "./types"
 
+// ---- error classification ----
+
+function classifyLlmError(e: unknown): string {
+  if (e !== null && typeof e === "object") {
+    const status = (e as { status?: number }).status
+    if (status === 401 || status === 403) return "E_LLM_AUTH"
+    if (status === 400 || status === 422) return "E_LLM_BAD_REQUEST"
+    if (status === 429) return "E_LLM_RATE_LIMIT"
+    if (status !== undefined && status >= 500) return "E_LLM_UPSTREAM"
+  }
+  const msg = String((e as Error)?.message ?? e ?? "")
+  if (/ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|fetch failed/i.test(msg)) return "E_LLM_NETWORK"
+  return "E_LLM_FAILED"
+}
+
 // ---- runtime health state ----
 
 const runtimeDisabled = new Set<LlmProviderKey>()
@@ -61,12 +76,13 @@ async function callChat(
   cfg: LlmProviderCfg,
 ): Promise<LlmResponse> {
   if (cfg.provider === "anthropic") {
-    return anthropicChat(req, { model: cfg.model, envKey: cfg.envKey })
+    return anthropicChat(req, { model: cfg.model, envKey: cfg.envKey, maxTokensRange: cfg.maxTokensRange })
   }
   return openAiChat(req, {
     baseURL: cfg.baseURL!,
     model: cfg.model,
     envKey: cfg.envKey,
+    maxTokensRange: cfg.maxTokensRange,
   })
 }
 
@@ -76,12 +92,13 @@ function callStream(
   cfg: LlmProviderCfg,
 ): AsyncIterable<LlmStreamEvent> {
   if (cfg.provider === "anthropic") {
-    return anthropicStream(req, { model: cfg.model, envKey: cfg.envKey })
+    return anthropicStream(req, { model: cfg.model, envKey: cfg.envKey, maxTokensRange: cfg.maxTokensRange })
   }
   return openAiStream(req, {
     baseURL: cfg.baseURL!,
     model: cfg.model,
     envKey: cfg.envKey,
+    maxTokensRange: cfg.maxTokensRange,
   })
 }
 
@@ -140,15 +157,22 @@ export async function chat(req: LlmRequest): Promise<LlmResponse> {
     }
 
     markFailure(key)
+    const code = classifyLlmError(lastErr)
     errors.push(
-      `${key}: ${String(lastErr instanceof Error ? (lastErr as Error).message : lastErr)}`,
+      `${key}[${code}]: ${String(lastErr instanceof Error ? (lastErr as Error).message : lastErr)}`,
     )
   }
 
-  throw new AppError(
-    "E_GATE_CLOSED",
-    `所有 LLM 提供商均不可用: ${errors.join("; ")}`,
-  )
+  // 用最具体的错误码
+  const allCodes = errors.map((e) => e.match(/\[(E_LLM_\w+)\]/)?.[1]).filter(Boolean) as string[]
+  const code = allCodes.find((c) => c === "E_LLM_AUTH") ??
+               allCodes.find((c) => c === "E_LLM_BAD_REQUEST") ??
+               allCodes.find((c) => c === "E_LLM_RATE_LIMIT") ??
+               allCodes.find((c) => c === "E_LLM_UPSTREAM") ??
+               allCodes.find((c) => c === "E_LLM_NETWORK") ??
+               "E_GATE_CLOSED"
+
+  throw new AppError(code, `所有 LLM 提供商均不可用: ${errors.join("; ")}`)
 }
 
 /**
@@ -225,7 +249,8 @@ export async function* stream(
 
     markFailure(key)
     if (lastErr) {
-      errors.push(`${key}: ${lastErr.message}`)
+      const code = classifyLlmError(lastErr)
+      errors.push(`${key}[${code}]: ${lastErr.message}`)
     }
   }
 

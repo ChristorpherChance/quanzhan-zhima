@@ -5,7 +5,7 @@ import { J } from "@/lib/db/json"
 import { chat } from "@/lib/llm/gateway"
 import { piSessionPool } from "@/lib/pi/session-manager"
 import type { AgentRunCtx } from "@/agents/types"
-import { loadAgentConfig } from "@/agents/registry"
+import { loadAgentConfig, buildSystemPrompt } from "@/agents/registry"
 import { execSync } from "node:child_process"
 import fs from "node:fs/promises"
 import path from "node:path"
@@ -37,17 +37,18 @@ function toolAvailable(cwd: string, bin: string): boolean {
   }
 }
 
-async function summarizeWithLlm(results: Record<string, unknown>) {
+async function summarizeWithLlm(results: Record<string, unknown>, projectId: string) {
   const cfg = await loadAgentConfig("review")
+  const baseSystem = "你是审查 Agent。基于工具输出，生成 review-report.md。\n" +
+    "格式：\n# 摘要（<=200字）\n# 关键发现\n按 P0/P1/P2 分组：\n- [P0] path/file.ts:123 描述\n- [P1] path/other.ts:45 描述\n" +
+    "# 修复建议（最多8条）\n# 复跑命令\n\n严禁编造行号。"
+  const systemPrompt = await buildSystemPrompt("review", projectId, baseSystem)
   const summary = await chat({
     task: "review",
     messages: [
       {
         role: "system",
-        content:
-          "你是审查 Agent。基于工具输出，生成 review-report.md。\n" +
-          "格式：\n# 摘要（<=200字）\n# 关键发现\n按 P0/P1/P2 分组：\n- [P0] path/file.ts:123 描述\n- [P1] path/other.ts:45 描述\n" +
-          "# 修复建议（最多8条）\n# 复跑命令\n\n严禁编造行号。",
+        content: systemPrompt,
       },
       { role: "user", content: JSON.stringify(results) },
     ],
@@ -144,7 +145,7 @@ export async function runReview(ctx: AgentRunCtx, scope: string[]): Promise<void
     _buildOk: codeMeta.builtOk ?? null,
   })
 
-  const markdown = await summarizeWithLlm(out)
+  const markdown = await summarizeWithLlm(out, ctx.projectId)
   const hasP0 = /^- \[P0\]/m.test(markdown)
   const hasP1 = /^- \[P1\]/m.test(markdown)
 

@@ -1,10 +1,12 @@
 import Anthropic from "@anthropic-ai/sdk"
 import { AppError } from "@/lib/errors"
+import { clampMaxTokens } from "@/config/models"
 import type { LlmRequest, LlmResponse, LlmStreamEvent } from "./types"
 
 export interface AnthropicOpts {
   model: string
   envKey: string
+  maxTokensRange?: { min: number; max: number; default: number }
 }
 
 function getClient(opts: AnthropicOpts): Anthropic {
@@ -41,7 +43,7 @@ export async function chat(
   const system = extractSystem(req)
   const messages = convertMessages(req)
   const temperature = req.temperature ?? 0.4
-  const maxTokens = req.maxTokens ?? 4096
+  const maxTokens = clampMaxTokens(req.maxTokens, opts.maxTokensRange)
 
   const response = await client.messages.create({
     model: opts.model,
@@ -81,7 +83,7 @@ export async function* stream(
   const system = extractSystem(req)
   const messages = convertMessages(req)
   const temperature = req.temperature ?? 0.4
-  const maxTokens = req.maxTokens ?? 4096
+  const maxTokens = clampMaxTokens(req.maxTokens, opts.maxTokensRange)
 
   try {
     const rawStream = await client.messages.create({

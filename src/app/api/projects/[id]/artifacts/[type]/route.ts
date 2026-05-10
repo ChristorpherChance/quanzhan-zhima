@@ -39,5 +39,5 @@ export const GET = withErrorBoundary(async (
     throw new AppError("E_NOT_FOUND", `Artifact file not found: ${artifact.storagePath}`)
   }
 
-  return { content, type: artifact.type, version: artifact.version }
+  return { content, type: artifact.type, version: artifact.version, locked: artifact.locked }
 })

@@ -3,15 +3,18 @@
 import { useEffect, useState, useCallback } from "react"
 import { useParams, useRouter } from "next/navigation"
 import Link from "next/link"
+import dynamic from "next/dynamic"
 import { Button } from "@/components/ui/button"
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Separator } from "@/components/ui/separator"
-import { ArrowLeft, Save, Zap, Loader2, CheckCircle2, XCircle } from "lucide-react"
+import { ArrowLeft, Save, Zap, Loader2, CheckCircle2, XCircle, RotateCcw } from "lucide-react"
+
+const MonacoEditor = dynamic(() => import("@monaco-editor/react").then((m) => m.Editor), { ssr: false })
 
 interface AgentRow {
   key: string
@@ -24,6 +27,11 @@ interface AgentRow {
   maxTokens: number
   timeoutMs: number
   enabled: boolean
+  systemPrompt?: string | null
+}
+
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 2.5)
 }
 
 export default function AgentDetailPage() {
@@ -60,6 +68,7 @@ export default function AgentDetailPage() {
           maxTokens: Number(agent.maxTokens),
           timeoutMs: Number(agent.timeoutMs),
           enabled: agent.enabled,
+          systemPrompt: agent.systemPrompt ?? null,
         }),
       })
       router.refresh()
@@ -103,8 +112,10 @@ export default function AgentDetailPage() {
     )
   }
 
+  const tokenEstimate = estimateTokens(agent.systemPrompt ?? "")
+
   return (
-    <div className="max-w-xl mx-auto py-8 px-4 space-y-6">
+    <div className="max-w-2xl mx-auto py-8 px-4 space-y-6">
       <div className="flex items-center gap-3">
         <Link href="/settings/agents">
           <Button variant="ghost" size="icon" className="h-8 w-8">
@@ -117,132 +128,204 @@ export default function AgentDetailPage() {
         </Badge>
       </div>
 
-      {/* 基础信息 */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm">基础信息</CardTitle>
-          <CardDescription>{agent.description}</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <Label className="text-xs">Agent Key</Label>
-              <Input value={agent.key} disabled className="h-8 text-xs" />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">所属阶段</Label>
-              <Input value={agent.stage} disabled className="h-8 text-xs" />
-            </div>
-          </div>
-          <div className="flex items-center justify-between">
-            <Label htmlFor="enabled" className="text-xs">启用状态</Label>
-            <Switch
-              id="enabled"
-              checked={agent.enabled}
-              onCheckedChange={(v) => setAgent({ ...agent, enabled: v })}
-            />
-          </div>
-        </CardContent>
-      </Card>
+      <Tabs defaultValue="basic" className="w-full">
+        <TabsList className="w-full">
+          <TabsTrigger value="basic" className="flex-1">基础参数</TabsTrigger>
+          <TabsTrigger value="prompt" className="flex-1">System Prompt</TabsTrigger>
+          <TabsTrigger value="test" className="flex-1">试运行</TabsTrigger>
+        </TabsList>
 
-      {/* 模型配置 */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm">模型配置</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <Label className="text-xs">Provider</Label>
-              <Input
-                value={agent.provider}
-                onChange={(e) => setAgent({ ...agent, provider: e.target.value })}
-                className="h-8 text-xs"
-              />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Model ID</Label>
-              <Input
-                value={agent.modelId}
-                onChange={(e) => setAgent({ ...agent, modelId: e.target.value })}
-                className="h-8 text-xs"
-              />
-            </div>
-          </div>
-          <div className="grid grid-cols-3 gap-3">
-            <div className="space-y-1">
-              <Label className="text-xs">Temperature</Label>
-              <Input
-                type="number"
-                step={0.1}
-                min={0}
-                max={2}
-                value={agent.temperature}
-                onChange={(e) => setAgent({ ...agent, temperature: Number(e.target.value) })}
-                className="h-8 text-xs"
-              />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Max Tokens</Label>
-              <Input
-                type="number"
-                step={256}
-                min={256}
-                value={agent.maxTokens}
-                onChange={(e) => setAgent({ ...agent, maxTokens: Number(e.target.value) })}
-                className="h-8 text-xs"
-              />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Timeout (ms)</Label>
-              <Input
-                type="number"
-                step={30000}
-                min={60000}
-                value={agent.timeoutMs}
-                onChange={(e) => setAgent({ ...agent, timeoutMs: Number(e.target.value) })}
-                className="h-8 text-xs"
-              />
-            </div>
-          </div>
-        </CardContent>
-        <CardFooter className="gap-2">
-          <Button size="sm" onClick={save} disabled={saving} className="gap-1">
-            {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-            保存
-          </Button>
-          <Button variant="outline" size="sm" onClick={dryRun} disabled={testing} className="gap-1">
-            {testing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
-            测试连接
-          </Button>
-        </CardFooter>
-      </Card>
+        {/* 基础参数 */}
+        <TabsContent value="basic" className="space-y-4 mt-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm">基础信息</CardTitle>
+              <CardDescription>{agent.description}</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label className="text-xs">Agent Key</Label>
+                  <Input value={agent.key} disabled className="h-8 text-xs" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">所属阶段</Label>
+                  <Input value={agent.stage} disabled className="h-8 text-xs" />
+                </div>
+              </div>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="enabled" className="text-xs">启用状态</Label>
+                <Switch
+                  id="enabled"
+                  checked={agent.enabled}
+                  onCheckedChange={(v) => setAgent({ ...agent, enabled: v })}
+                />
+              </div>
+            </CardContent>
+          </Card>
 
-      {/* 测试结果 */}
-      {testResult && (
-        <Card className={testResult.ok ? "border-green-200" : "border-red-200"}>
-          <CardHeader className="pb-2">
-            <div className="flex items-center gap-2">
-              {testResult.ok ? (
-                <CheckCircle2 className="w-4 h-4 text-green-600" />
-              ) : (
-                <XCircle className="w-4 h-4 text-red-500" />
-              )}
-              <CardTitle className="text-sm">
-                {testResult.ok ? "测试通过" : "测试失败"}
-              </CardTitle>
-              {testResult.latencyMs != null && (
-                <Badge variant="outline" className="text-xs">{testResult.latencyMs}ms</Badge>
-              )}
-            </div>
-          </CardHeader>
-          <CardContent>
-            <p className="text-xs text-muted-foreground whitespace-pre-wrap">
-              {testResult.ok ? testResult.response : testResult.error}
-            </p>
-          </CardContent>
-        </Card>
-      )}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm">模型配置</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label className="text-xs">Provider</Label>
+                  <Input
+                    value={agent.provider}
+                    onChange={(e) => setAgent({ ...agent, provider: e.target.value })}
+                    className="h-8 text-xs"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Model ID</Label>
+                  <Input
+                    value={agent.modelId}
+                    onChange={(e) => setAgent({ ...agent, modelId: e.target.value })}
+                    className="h-8 text-xs"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <div className="space-y-1">
+                  <Label className="text-xs">Temperature</Label>
+                  <Input
+                    type="number"
+                    step={0.1}
+                    min={0}
+                    max={2}
+                    value={agent.temperature}
+                    onChange={(e) => setAgent({ ...agent, temperature: Number(e.target.value) })}
+                    className="h-8 text-xs"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Max Tokens</Label>
+                  <Input
+                    type="number"
+                    step={256}
+                    min={256}
+                    value={agent.maxTokens}
+                    onChange={(e) => setAgent({ ...agent, maxTokens: Number(e.target.value) })}
+                    className="h-8 text-xs"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Timeout (ms)</Label>
+                  <Input
+                    type="number"
+                    step={30000}
+                    min={60000}
+                    value={agent.timeoutMs}
+                    onChange={(e) => setAgent({ ...agent, timeoutMs: Number(e.target.value) })}
+                    className="h-8 text-xs"
+                  />
+                </div>
+              </div>
+            </CardContent>
+            <CardFooter className="gap-2">
+              <Button size="sm" onClick={save} disabled={saving} className="gap-1">
+                {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                保存
+              </Button>
+            </CardFooter>
+          </Card>
+        </TabsContent>
+
+        {/* System Prompt */}
+        <TabsContent value="prompt" className="space-y-4 mt-4">
+          <Card>
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-sm">System Prompt</CardTitle>
+                  <CardDescription>覆盖默认系统提示词。留空则使用内置默认值。</CardDescription>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground">
+                    ~{tokenEstimate} tokens / {agent.systemPrompt?.length ?? 0} 字
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-1"
+                    onClick={() => setAgent({ ...agent, systemPrompt: "" })}
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    重置
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="border rounded-md overflow-hidden" style={{ height: 420 }}>
+                <MonacoEditor
+                  height="100%"
+                  defaultLanguage="markdown"
+                  value={agent.systemPrompt ?? ""}
+                  onChange={(v) => setAgent({ ...agent, systemPrompt: v ?? "" })}
+                  options={{
+                    minimap: { enabled: false },
+                    fontSize: 13,
+                    lineNumbers: "on",
+                    wordWrap: "on",
+                    scrollBeyondLastLine: false,
+                  }}
+                  loading={<Skeleton className="h-full w-full" />}
+                />
+              </div>
+            </CardContent>
+            <CardFooter className="gap-2">
+              <Button size="sm" onClick={save} disabled={saving} className="gap-1">
+                {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                保存
+              </Button>
+            </CardFooter>
+          </Card>
+        </TabsContent>
+
+        {/* 试运行 */}
+        <TabsContent value="test" className="space-y-4 mt-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm">试运行</CardTitle>
+              <CardDescription>发送一条测试请求，验证当前配置是否可用。</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button variant="outline" size="sm" onClick={dryRun} disabled={testing} className="gap-1">
+                {testing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+                测试连接
+              </Button>
+            </CardContent>
+          </Card>
+
+          {testResult && (
+            <Card className={testResult.ok ? "border-green-200" : "border-red-200"}>
+              <CardHeader className="pb-2">
+                <div className="flex items-center gap-2">
+                  {testResult.ok ? (
+                    <CheckCircle2 className="w-4 h-4 text-green-600" />
+                  ) : (
+                    <XCircle className="w-4 h-4 text-red-500" />
+                  )}
+                  <CardTitle className="text-sm">
+                    {testResult.ok ? "测试通过" : "测试失败"}
+                  </CardTitle>
+                  {testResult.latencyMs != null && (
+                    <Badge variant="outline" className="text-xs">{testResult.latencyMs}ms</Badge>
+                  )}
+                </div>
+              </CardHeader>
+              <CardContent>
+                <p className="text-xs text-muted-foreground whitespace-pre-wrap">
+                  {testResult.ok ? testResult.response : testResult.error}
+                </p>
+              </CardContent>
+            </Card>
+          )}
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }

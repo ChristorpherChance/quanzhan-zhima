@@ -17,6 +17,7 @@ export const PI_PROVIDER: Record<LlmProviderKey, string> = {
   kimi: "moonshotai",
   xiaomi: "xiaomi",
   gpt: "openai",
+  ollama: "ollama",
 }
 
 /** Read saved API keys from settings.json (if any). */
@@ -74,7 +75,7 @@ export function getPiRegistry(
 
   // Register custom providers for models NOT in the Pi SDK built-in list.
   // deepseek 也走自定义注册，确保 model id 受控（deepseek-chat / deepseek-reasoner）
-  const customOnly: LlmProviderKey[] = ["deepseek", "kimi", "xiaomi"]
+  const customOnly: LlmProviderKey[] = ["deepseek", "kimi", "xiaomi", "ollama"]
   for (const key of customOnly) {
     const cfg = config[key]
     if (!cfg.enabled) continue

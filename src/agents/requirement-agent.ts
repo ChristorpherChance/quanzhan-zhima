@@ -1,5 +1,5 @@
 import fs from "node:fs/promises"
-import { dirname } from "node:path"
+import { dirname, join } from "node:path"
 import { chat, stream } from "@/lib/llm/gateway"
 import { prisma } from "@/lib/db/prisma"
 import { paths } from "@/config/paths"
@@ -12,6 +12,14 @@ import {
   REQUIREMENT_DRAFT_USER,
   REQUIREMENT_EDIT_USER,
 } from "@/agents/prompts/requirement"
+import { RED_LINES_BLOCK } from "@/agents/prompts/_red-lines"
+import { stripMetaTalk } from "@/agents/utils/strip-meta"
+import { buildSystemPrompt, loadAgentConfig } from "@/agents/registry"
+import { runPiSession, type PiSessionEvent } from "@/lib/pi/session"
+
+async function getSystemPrompt(projectId: string): Promise<string> {
+  return buildSystemPrompt("requirement", projectId, RED_LINES_BLOCK + "\n\n" + REQUIREMENT_SYSTEM)
+}
 
 async function appendRequirements(projectId: string, entry: string) {
   try {
@@ -59,6 +67,21 @@ async function upsertArtifact(
   }
 }
 
+async function autoLockArtifact(projectId: string, type: string) {
+  try {
+    const a = await prisma.artifact.findFirst({
+      where: { projectId, type },
+      orderBy: { version: "desc" },
+    })
+    if (a && !a.locked) {
+      await prisma.artifact.update({
+        where: { id: a.id },
+        data: { locked: true, lockedAt: new Date() },
+      })
+    }
+  } catch { /* 静默失败 */ }
+}
+
 async function loadUploadedDocs(projectId: string): Promise<string> {
   const uploads = await prisma.artifact.findMany({
     where: { projectId, type: "requirement-upload" },
@@ -97,7 +120,7 @@ export async function clarify(
     const res = await chat({
       task: "clarify",
       messages: [
-        { role: "system", content: REQUIREMENT_SYSTEM },
+        { role: "system", content: await getSystemPrompt(ctx.projectId) },
         { role: "user", content: userMessage },
       ],
     })
@@ -145,33 +168,72 @@ export async function draft(
   }
 
   try {
-    const streamGen = stream({
-      task: "reason-heavy",
-      messages: [
-        { role: "system", content: REQUIREMENT_SYSTEM },
-        { role: "user", content: userMessage },
-      ],
-    })
+    const systemPrompt = await getSystemPrompt(ctx.projectId)
 
+    // K6: Pi 生成模式
+    const filePath = paths.prd(ctx.projectId)
+    const workspaceDir = join(paths.workspace(ctx.projectId), "requirement", "draft")
+    await fs.mkdir(workspaceDir, { recursive: true })
+    // 写入上下文文件
+    if (uploadedDocs) await fs.writeFile(join(workspaceDir, "UPLOADED_DOCS.md"), uploadedDocs, "utf-8")
+    if (oneLiner) await fs.writeFile(join(workspaceDir, "ONELINER.txt"), oneLiner, "utf-8")
+
+    const cfg = await loadAgentConfig("requirement")
     let content = ""
-    for await (const event of streamGen) {
-      if (event.type === "delta" && event.text) {
-        content += event.text
-        ctx.send("text_delta", { text: event.text })
-      } else if (event.type === "error") {
-        throw new Error(event.error ?? "stream error")
+    let piOk = false
+
+    try {
+      const r = await runPiSession({
+        projectId: ctx.projectId,
+        workspaceDir,
+        prompt: `请基于上传的需求文档和项目简述，生成完整的 PRD 文档，输出到 prd.md。完成后追加 <!-- END:requirement --> 标记。\n\n${userMessage}`,
+        provider: cfg.provider as "deepseek" | "anthropic" | "kimi" | "xiaomi" | "openai",
+        modelId: cfg.modelId,
+        timeoutMs: cfg.timeoutMs,
+        systemPromptOverride: systemPrompt,
+        onEvent: (e: PiSessionEvent) => {
+          if (e.type === "text_delta") {
+            const d = e.data as { text?: string }
+            if (d?.text) ctx.send("text_delta", { text: d.text })
+          }
+        },
+      })
+      piOk = r.ok
+      if (r.ok) {
+        try { content = await fs.readFile(join(workspaceDir, "prd.md"), "utf-8") } catch { content = "" }
+      }
+    } catch { /* Pi 失败 */ }
+
+    // Fallback to gateway.stream()
+    if (!piOk || !content) {
+      ctx.send("log", { line: "Pi 不可用，回退到传统流式生成 PRD" })
+      const streamGen = stream({
+        task: "reason-heavy",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userMessage },
+        ],
+      })
+
+      for await (const event of streamGen) {
+        if (event.type === "delta" && event.text) {
+          content += event.text
+          ctx.send("text_delta", { text: event.text })
+        } else if (event.type === "error") {
+          throw new Error(event.error ?? "stream error")
+        }
+      }
+
+      const mdMatch = content.match(/^```(?:markdown|md)?\s*\n([\s\S]*?)\n```\s*$/)
+      if (mdMatch) {
+        content = mdMatch[1]
       }
     }
 
-    // 如果 LLM 返回的内容包裹在 markdown 代码块中，去掉外层包裹
-    const mdMatch = content.match(/^```(?:markdown|md)?\s*\n([\s\S]*?)\n```\s*$/)
-    if (mdMatch) {
-      content = mdMatch[1]
-    }
+    content = stripMetaTalk(content)
 
     // 写入文件
     ctx.setPhase("writing", "写入 PRD 文档")
-    const filePath = paths.prd(ctx.projectId)
     await fs.mkdir(dirname(filePath), { recursive: true })
     await fs.writeFile(filePath, content, "utf-8")
 
@@ -180,6 +242,9 @@ export async function draft(
       oneLiner,
       answerCount: Object.keys(answers).length,
     })
+
+    // 自动锁定 PRD
+    await autoLockArtifact(ctx.projectId, "prd")
 
     // 追加到 REQUIREMENTS.md
     await appendRequirements(ctx.projectId, `PRD 生成完成 (${content.length} 字符)`)
@@ -213,32 +278,72 @@ export async function edit(
       log("agent", `requirement:edit no existing PRD found, will create new`)
     }
 
+    const systemPrompt = await getSystemPrompt(ctx.projectId)
     const userMessage = REQUIREMENT_EDIT_USER(instruction, section)
-    const fullUserMessage = existingContent
-      ? `当前 PRD 内容:\n\n${existingContent}\n\n---\n\n${userMessage}`
-      : userMessage
 
-    const streamGen = stream({
-      task: "reason-heavy",
-      messages: [
-        { role: "system", content: REQUIREMENT_SYSTEM },
-        { role: "user", content: fullUserMessage },
-      ],
-    })
+    // K6: Pi 编辑模式
+    const workspaceDir = join(paths.workspace(ctx.projectId), "requirement", "edit")
+    await fs.mkdir(workspaceDir, { recursive: true })
+    if (existingContent) await fs.writeFile(join(workspaceDir, "prd.md"), existingContent, "utf-8")
 
+    const cfg = await loadAgentConfig("requirement")
     let content = ""
-    for await (const event of streamGen) {
-      if (event.type === "delta" && event.text) {
-        content += event.text
-        ctx.send("text_delta", { text: event.text })
-      } else if (event.type === "error") {
-        throw new Error(event.error ?? "stream error")
+    let piOk = false
+
+    try {
+      const r = await runPiSession({
+        projectId: ctx.projectId,
+        workspaceDir,
+        prompt: existingContent
+          ? `编辑 PRD。${userMessage}\n请修改 prd.md 并保存。完成后追加 <!-- END:requirement --> 标记。`
+          : `生成 PRD。${userMessage}\n请输出到 prd.md。完成后追加 <!-- END:requirement --> 标记。`,
+        provider: cfg.provider as "deepseek" | "anthropic" | "kimi" | "xiaomi" | "openai",
+        modelId: cfg.modelId,
+        timeoutMs: cfg.timeoutMs,
+        systemPromptOverride: systemPrompt,
+        onEvent: (e: PiSessionEvent) => {
+          if (e.type === "text_delta") {
+            const d = e.data as { text?: string }
+            if (d?.text) ctx.send("text_delta", { text: d.text })
+          }
+        },
+      })
+      piOk = r.ok
+      if (r.ok) {
+        try { content = await fs.readFile(join(workspaceDir, "prd.md"), "utf-8") } catch { content = "" }
+      }
+    } catch { /* Pi 失败 */ }
+
+    // Fallback to gateway.stream()
+    if (!piOk || !content) {
+      ctx.send("log", { line: "Pi 不可用，回退到传统流式编辑 PRD" })
+      const fullUserMessage = existingContent
+        ? `当前 PRD 内容:\n\n${existingContent}\n\n---\n\n${userMessage}`
+        : userMessage
+
+      const streamGen = stream({
+        task: "reason-heavy",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: fullUserMessage },
+        ],
+      })
+
+      for await (const event of streamGen) {
+        if (event.type === "delta" && event.text) {
+          content += event.text
+          ctx.send("text_delta", { text: event.text })
+        } else if (event.type === "error") {
+          throw new Error(event.error ?? "stream error")
+        }
+      }
+      const mdMatch = content.match(/^```(?:markdown|md)?\s*\n([\s\S]*?)\n```\s*$/)
+      if (mdMatch) {
+        content = mdMatch[1]
       }
     }
-    const mdMatch = content.match(/^```(?:markdown|md)?\s*\n([\s\S]*?)\n```\s*$/)
-    if (mdMatch) {
-      content = mdMatch[1]
-    }
+
+    content = stripMetaTalk(content)
 
     await fs.mkdir(dirname(filePath), { recursive: true })
     await fs.writeFile(filePath, content, "utf-8")
@@ -247,6 +352,9 @@ export async function edit(
       editInstruction: instruction,
       editSection: section ?? null,
     })
+
+    // 自动锁定 PRD
+    await autoLockArtifact(ctx.projectId, "prd")
 
     // 追加到 REQUIREMENTS.md
     await appendRequirements(ctx.projectId, `PRD 编辑: ${instruction.slice(0, 80)}`)

@@ -16,6 +16,7 @@ export interface AgentConfig {
   maxTokens: number
   timeoutMs: number
   enabled: boolean
+  systemPrompt?: string | null
 }
 
 const DEFAULTS: Record<string, AgentConfig> = {
@@ -102,10 +103,48 @@ export async function loadAgentConfig(key: string): Promise<AgentConfig> {
         maxTokens: row?.maxTokens ?? base.maxTokens,
         timeoutMs: row?.timeoutMs ?? base.timeoutMs,
         enabled: row?.enabled ?? base.enabled,
+        systemPrompt: row?.systemPrompt ?? base.systemPrompt,
       }
     }
     return base
   } catch {
     return base
+  }
+}
+
+/**
+ * K1: 构造完整 system prompt（DB 覆盖 + Memory + Skill）。
+ * 所有 agent 构造 system prompt 时统一调用此函数。
+ */
+export async function buildSystemPrompt(
+  key: string,
+  projectId: string,
+  baseSystem: string,
+): Promise<string> {
+  try {
+    const { prisma } = await import("@/lib/db/prisma")
+    const [cfg, mems, skills] = await Promise.all([
+      prisma.agentConfig.findUnique({ where: { key } }).catch(() => null),
+      prisma.agentMemory.findMany({
+        where: { agentKey: key, OR: [{ projectId }, { projectId: null }] },
+        orderBy: [{ weight: "desc" }, { updatedAt: "desc" }],
+        take: 20,
+      }).catch(() => []),
+      prisma.agentSkill.findMany({ where: { agentKey: key, isEnabled: true } }).catch(() => []),
+    ])
+
+    const sysOverride = cfg?.systemPrompt?.trim() || baseSystem
+
+    const memBlock = mems.length
+      ? `\n\n# 记忆库（按权重）\n${mems.map((m: { kind: string; title: string; content: string }) => `- [${m.kind}] ${m.title}: ${m.content}`).join("\n")}`
+      : ""
+
+    const skillBlock = skills.length
+      ? `\n\n# 技能库\n${skills.map((s: { name: string; instruction: string; examplesJson: string }) => `## ${s.name}\n${s.instruction}\n示例:\n${s.examplesJson}`).join("\n\n")}`
+      : ""
+
+    return sysOverride + memBlock + skillBlock
+  } catch {
+    return baseSystem
   }
 }

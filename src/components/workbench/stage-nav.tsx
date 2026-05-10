@@ -3,6 +3,7 @@
 import Link from "next/link"
 import { useParams, usePathname } from "next/navigation"
 import { Badge } from "@/components/ui/badge"
+import { Settings } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 const STAGES = [
@@ -62,6 +63,20 @@ export function StageNav({ currentStage, gates = [] }: StageNavProps) {
           </Link>
         )
       })}
+
+      {/* 分隔线 + 设置入口 */}
+      <div className="mt-2 pt-2 border-t">
+        <Link
+          href="/settings"
+          className={cn(
+            "flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors",
+            "text-muted-foreground hover:bg-muted hover:text-foreground",
+          )}
+        >
+          <Settings className="w-4 h-4" />
+          <span>设置</span>
+        </Link>
+      </div>
     </nav>
   )
 }

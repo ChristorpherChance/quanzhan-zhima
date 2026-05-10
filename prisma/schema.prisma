@@ -55,7 +55,8 @@ model Conversation {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project  Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  messages ChatMessage[]
 
   @@unique([projectId, agentType])
 }
@@ -135,9 +136,61 @@ model AgentConfig {
   maxTokens   Int      @default(4096)
   timeoutMs   Int      @default(600000)
   enabled     Boolean  @default(true)
+  systemPrompt String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  memories AgentMemory[]
+  skills   AgentSkill[]
+
   @@index([key])
   @@index([stage])
+}
+
+// K1: Agent 记忆库
+model AgentMemory {
+  id        String   @id @default(cuid())
+  agentKey  String
+  projectId String?
+  kind      String   // fact | preference | skill_note | error_lesson
+  title     String
+  content   String
+  weight    Float    @default(1.0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  config AgentConfig @relation(fields: [agentKey], references: [key], onDelete: Cascade)
+
+  @@index([agentKey, projectId])
+  @@index([agentKey, weight(sort: Desc)])
+}
+
+// K1: Agent 技能库
+model AgentSkill {
+  id           String   @id @default(cuid())
+  agentKey     String
+  name         String
+  instruction  String
+  examplesJson String   @default("[]")
+  isEnabled    Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  config AgentConfig @relation(fields: [agentKey], references: [key], onDelete: Cascade)
+
+  @@index([agentKey])
+}
+
+// K3: 对话消息
+model ChatMessage {
+  id             String   @id @default(cuid())
+  conversationId String
+  role           String   // user | assistant | system | tool
+  content        String
+  meta           String?  // tool_call info / job_id
+  createdAt      DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
 }

@@ -111,6 +111,47 @@ src/
 | 全自动 (auto) | Gate 自动流转 |
 | 混合 (hybrid) | AI 自评分 >= 阈值自动通过，否则需人工 |
 
+## 故障排查
+
+### `max_tokens 参数错误 / 400 Bad Request`
+
+原因：Agent 设置中 maxTokens 超出提供商范围。
+解决：进入「设置 > Agent 配置 > 基础参数」，将 Max Tokens 调整到 256-16384 范围。系统已自动钳制越界值（K4）。
+
+### 「阶段条件未满足」无法进入下一阶段
+
+原因：当前阶段产物未全部锁定（G1 需 PRD 锁定，G2 需 5 项设计产物全锁定）。
+解决：在对应页面点击「确认」或「一键确认全部」按钮锁定产物。设计页面右上角可一键锁定 5 项（K9）。
+
+### UI 原型内容截断或不完整
+
+原因：LLM 输出达到 max_tokens 上限。
+解决：系统已内置连续续写 + selfCheckUi 自检（K7），UI 评分 < 70 自动补写。手动方案：增大 Agent 的 Max Tokens 设置。
+
+### PRD 编辑器无法编辑
+
+原因：PRD 已锁定（只读状态）。
+解决：右上角会显示「PRD 已锁定（只读）」提示。如需解锁，管理员可通过 API 手动解锁。
+
+### 使用本地 Ollama 模型
+
+1. 启动 Ollama：`ollama serve`
+2. 拉取模型：`ollama pull qwen2.5:14b`
+3. 在 `.env.local` 中设置：`OLLAMA_BASE_URL=http://localhost:11434/v1`
+4. 进入「设置 > LLM 提供商」启用 Ollama（K5）
+
+### 找不到设置页面
+
+顶部导航栏或左侧底部有「设置」入口（齿轮图标）。点击进入后左侧菜单可访问 LLM、Agent、HITL、沙箱和导出配置（K1）。
+
+### 构建/类型检查不通过
+
+```bash
+pnpm typecheck  # TypeScript 类型检查
+pnpm build      # Next.js 生产构建
+pnpm smoke:e2e  # 端到端冒烟测试
+```
+
 ## 种子项目
 
 - **光伏电站监控系统**: 设备状态监测 + 告警 + 巡检

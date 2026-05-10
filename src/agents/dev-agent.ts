@@ -6,7 +6,7 @@ import type { AgentRunCtx } from "@/agents/types"
 import { runPiSession } from "@/lib/pi/session"
 import { buildDevSystemPrompt, buildDevUserPrompt } from "@/agents/prompts/dev"
 import { reopenFromGate } from "@/lib/hitl/gates"
-import { loadAgentConfig } from "@/agents/registry"
+import { loadAgentConfig, buildSystemPrompt } from "@/agents/registry"
 import fs from "node:fs/promises"
 import { execSync } from "node:child_process"
 
@@ -26,7 +26,8 @@ export async function runDev(ctx: AgentRunCtx, instruction?: string): Promise<vo
 
   // J3: 构建包含 PRD + 5 设计产物的系统提示词
   ctx.setPhase("thinking", "加载 PRD 与设计产物")
-  const systemPrompt = await buildDevSystemPrompt(ctx.projectId)
+  const basePrompt = await buildDevSystemPrompt(ctx.projectId)
+  const systemPrompt = await buildSystemPrompt("dev", ctx.projectId, basePrompt)
   const userPrompt = buildDevUserPrompt(instruction)
   ctx.send("log", { line: `Pi 启动: ${workspaceDir}` })
 
@@ -105,13 +106,21 @@ export async function runDev(ctx: AgentRunCtx, instruction?: string): Promise<vo
     coverageMd = await fs.readFile(`${workspaceDir}/COVERAGE.md`, "utf-8")
   } catch { /* 缺失 */ }
   if (coverageMd) {
-    // 读取 PRD 统计总 AC 数
     let prdContent = ""
     try { prdContent = await fs.readFile(paths.prd(ctx.projectId), "utf-8") } catch { /* ignore */ }
     const totalAcs = (prdContent.match(/AC[\d.]+/gi) ?? []).length
     const coveredAcs = (coverageMd.match(/AC[\d.]+/gi) ?? []).length
     coverage = totalAcs > 0 ? Math.round((coveredAcs / totalAcs) * 100) : null
   }
+
+  // K8.3: SELF_REVIEW.md 自评检测
+  let selfReviewPass = 0
+  let selfReviewTotal = 0
+  try {
+    const selfReview = await fs.readFile(`${workspaceDir}/SELF_REVIEW.md`, "utf-8")
+    selfReviewPass = (selfReview.match(/pass/gi) ?? []).length
+    selfReviewTotal = (selfReview.match(/(pass|fail)/gi) ?? []).length
+  } catch { /* 缺失 */ }
 
   // Upsert code artifact
   const existing = await prisma.artifact.findFirst({
@@ -120,7 +129,7 @@ export async function runDev(ctx: AgentRunCtx, instruction?: string): Promise<vo
   })
   let filesCount = 0
   try { filesCount = (await fs.readdir(workspaceDir)).length } catch { /* ignore */ }
-  const meta = { entry: "index.html", filesCount, builtOk, coverage }
+  const meta = { entry: "index.html", filesCount, builtOk, coverage, selfReview: selfReviewTotal > 0 ? { pass: selfReviewPass, total: selfReviewTotal } : null }
 
   if (existing && !existing.locked) {
     await prisma.artifact.update({
