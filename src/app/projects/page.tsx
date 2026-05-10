@@ -1,18 +1,9 @@
-import Link from "next/link"
 import { headers } from "next/headers"
 import { Button } from "@/components/ui/button"
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
 import { EggButton } from "@/components/marketing/egg-button"
+import { ProjectCard } from "@/components/projects/ProjectCard"
 import { PORTS } from "@/config/ports"
-
-const STAGE_LABELS: Record<string, string> = {
-  requirement: "需求",
-  design: "设计",
-  dev: "开发",
-  review: "审查",
-  done: "完成",
-}
+import Link from "next/link"
 
 async function getProjects() {
   let base: string
@@ -61,22 +52,14 @@ export default async function ProjectsPage() {
           </div>
         )}
         {projects.map((p: { id: string; name: string; oneLiner: string; currentStage: string; seedType?: string }) => (
-          <Link key={p.id} href={`/projects/${p.id}`}>
-            <Card className="hover:border-primary/50 transition-colors cursor-pointer h-full">
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-lg">{p.name}</CardTitle>
-                  {p.seedType && (
-                    <Badge variant="secondary">{p.seedType === "egg" ? "🪧" : "🌱"}</Badge>
-                  )}
-                </div>
-                <CardDescription>{p.oneLiner}</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <Badge>{STAGE_LABELS[p.currentStage] ?? p.currentStage}</Badge>
-              </CardContent>
-            </Card>
-          </Link>
+          <ProjectCard
+            key={p.id}
+            id={p.id}
+            name={p.name}
+            oneLiner={p.oneLiner}
+            currentStage={p.currentStage}
+            seedType={p.seedType}
+          />
         ))}
       </div>
     </div>

@@ -17,6 +17,7 @@ model Project {
   hitlMode      String   @default("manual")
   hitlThreshold Float    @default(0.8)
   confidence    Float?   @default(0)
+  archived      Boolean  @default(false)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
