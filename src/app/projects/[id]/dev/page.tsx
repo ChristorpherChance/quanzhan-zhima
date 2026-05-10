@@ -10,6 +10,7 @@ import { ThreePane } from "@/components/workbench/three-pane"
 import { StageNav } from "@/components/workbench/stage-nav"
 import { CodeBrowser } from "@/components/workbench/CodeBrowser"
 import { SandboxPanel } from "@/components/workbench/SandboxPanel"
+import { StackBlitzEmbed } from "@/components/workbench/StackBlitzEmbed"
 import { Wand2, Code, Play } from "lucide-react"
 
 export default function DevPage() {
@@ -198,8 +199,9 @@ export default function DevPage() {
                 停止
               </Button>
               <Button variant="outline" size="sm" onClick={handleExport}>
-                导出 zip
+                下载 zip
               </Button>
+              <StackBlitzEmbed projectId={pid} />
               <Button variant="outline" size="sm" onClick={handleLockG3}>
                 完成开发阶段
               </Button>

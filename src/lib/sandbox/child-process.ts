@@ -36,14 +36,14 @@ export async function startChild(opts: SandboxStartOpts): Promise<SandboxHandle>
   if (exists) return exists
 
   const port = await acquirePort("sandbox")
-  const isWindows = process.platform === "win32"
   log("sandbox", `start: project=${opts.projectId} port=${port} cmd=${opts.command} cwd=${opts.workspaceDir}`)
 
+  // J3.4: 全平台开 shell，确保 $PORT / && 等能正确解析
   const child: ChildProcess = spawn(opts.command, [], {
     cwd: opts.workspaceDir,
     env: sanitizedEnv(port),
     stdio: ["ignore", "pipe", "pipe"],
-    shell: isWindows, // Windows 需要 shell 才能找到 npm.cmd
+    shell: true,
   })
 
   child.stdout?.on("data", (b: Buffer) => log("sandbox", "out", b.toString().slice(0, 500)))
@@ -51,7 +51,8 @@ export async function startChild(opts: SandboxStartOpts): Promise<SandboxHandle>
   child.on("error", (err: Error) => log("sandbox", "spawn-error", err.message))
   child.on("exit", (code: number | null) => log("sandbox", `exit: pid=${child.pid} code=${code}`))
 
-  await waitPort(port, 30_000)
+  // J3.4: 超时延长到 180s，给 install + build 足够时间
+  await waitPort(port, 180_000)
 
   const h: SandboxHandle = {
     projectId: opts.projectId,

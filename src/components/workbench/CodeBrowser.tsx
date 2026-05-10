@@ -9,7 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
 import {
   File, Folder, FolderOpen, ChevronRight, ChevronDown,
-  Download, Copy, ExternalLink, AlertTriangle, RefreshCw,
+  Download, Copy, ExternalLink, AlertTriangle, RefreshCw, Save, Wand2,
 } from "lucide-react"
 
 interface FileEntry {
@@ -111,7 +111,9 @@ export function CodeBrowser({ projectId, sandboxUrl, className }: CodeBrowserPro
   const [loading, setLoading] = useState(true)
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
   const [fileContent, setFileContent] = useState<FileContent | null>(null)
+  const [editedContent, setEditedContent] = useState<string | null>(null)
   const [contentLoading, setContentLoading] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const fetchFiles = useCallback(async () => {
@@ -135,9 +137,10 @@ export function CodeBrowser({ projectId, sandboxUrl, className }: CodeBrowserPro
   const openFile = useCallback(async (filePath: string) => {
     setSelectedPath(filePath)
     setContentLoading(true)
+    setEditedContent(null)
     setError(null)
     try {
-      const r = await fetch(`/api/projects/${projectId}/files/${filePath}`)
+      const r = await fetch(`/api/projects/${projectId}/dev/file?path=${encodeURIComponent(filePath)}`)
       const data = await r.json()
       if (data.error) {
         setError(data.error)
@@ -152,6 +155,35 @@ export function CodeBrowser({ projectId, sandboxUrl, className }: CodeBrowserPro
       setContentLoading(false)
     }
   }, [projectId])
+
+  const handleSave = useCallback(async () => {
+    if (!selectedPath || editedContent == null) return
+    setSaving(true)
+    try {
+      await fetch(`/api/projects/${projectId}/dev/file`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: selectedPath, content: editedContent }),
+      })
+      setFileContent((prev) => prev ? { ...prev, content: editedContent } : null)
+      setEditedContent(null)
+    } catch { /* ignore */ }
+    finally { setSaving(false) }
+  }, [projectId, selectedPath, editedContent])
+
+  const handleAiEdit = useCallback(async () => {
+    if (!selectedPath) return
+    const sel = editedContent ?? fileContent?.content ?? ""
+    const instruction = prompt("AI 编辑指令（选中区域将作为上下文发送）:", `修改 ${selectedPath}`)
+    if (!instruction) return
+    try {
+      await fetch(`/api/projects/${projectId}/dev/patch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filePath: selectedPath, instruction }),
+      })
+    } catch { /* ignore */ }
+  }, [projectId, selectedPath, editedContent, fileContent])
 
   const handleCopy = useCallback(() => {
     if (fileContent?.content) {
@@ -237,6 +269,16 @@ export function CodeBrowser({ projectId, sandboxUrl, className }: CodeBrowserPro
               <Button variant="ghost" size="icon" className="h-6 w-6" onClick={handleDownload} title="下载">
                 <Download className="w-3 h-3" />
               </Button>
+              {editedContent != null && (
+                <Button variant="default" size="sm" className="h-6 text-[10px] gap-1" onClick={handleSave} disabled={saving}>
+                  <Save className="w-3 h-3" />
+                  {saving ? "保存中..." : "保存"}
+                </Button>
+              )}
+              <Button variant="outline" size="sm" className="h-6 text-[10px] gap-1" onClick={handleAiEdit} title="让 AI 修改此文件">
+                <Wand2 className="w-3 h-3" />
+                AI 改
+              </Button>
               {sandboxUrl && (
                 selectedPath && selectedPath.endsWith(".html") ? (
                   <Button
@@ -296,10 +338,11 @@ export function CodeBrowser({ projectId, sandboxUrl, className }: CodeBrowserPro
             <Editor
               height="100%"
               language={fileContent.language}
-              value={fileContent.content}
+              value={editedContent ?? fileContent.content}
               theme="vs-dark"
+              onChange={(val) => setEditedContent(val !== (fileContent.content ?? "") ? (val ?? "") : null)}
               options={{
-                readOnly: true,
+                readOnly: false,
                 minimap: { enabled: false },
                 fontSize: 13,
                 wordWrap: "on",

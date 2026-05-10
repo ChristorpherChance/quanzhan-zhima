@@ -1,12 +1,21 @@
 import { startChild, getRunning } from "./child-process"
 import type { SandboxHandle, SandboxStartOpts } from "./types"
 import { existsSync, readFileSync } from "node:fs"
+import { execSync } from "node:child_process"
 import { PORTS } from "@/config/ports"
 
 export async function startSandbox(opts: SandboxStartOpts): Promise<SandboxHandle> {
   const exists = getRunning(opts.projectId)
   if (exists) return exists
-  // Docker disabled by default (SANDBOX_DOCKER=0), always use child process
+
+  // J3.4: installFirst — 启动前先跑 install
+  const cmds = detectStartCommand(opts.workspaceDir)
+  if (cmds.install) {
+    try {
+      execSync(cmds.install, { cwd: opts.workspaceDir, stdio: "inherit", timeout: 10 * 60_000 })
+    } catch { /* install 失败不阻断，子进程会自行暴露错误 */ }
+  }
+
   return startChild(opts)
 }
 

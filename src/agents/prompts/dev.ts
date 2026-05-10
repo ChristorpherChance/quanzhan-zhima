@@ -23,6 +23,11 @@ export async function buildDevSystemPrompt(_projectId: string): Promise<string> 
 5. 最后写 COVERAGE.md 列每条 AC 对应的代码位置。`
 }
 
+export const DEV_PATCH_SYSTEM = `你是开发 Agent 的 patch 模式。任务：仅修改用户指定的文件区间，禁止重写整个项目。
+输入：filePath / lineRange / userInstruction。
+输出：直接 workspace_write 改写该文件；改完用 workspace_list 确认。
+禁止跨文件大范围改动；超出范围请在 PLAN.md 末尾追加 TODO。`
+
 export function buildDevUserPrompt(extra?: string): string {
   return (
     extra?.trim() ||
