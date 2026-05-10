@@ -32,6 +32,12 @@ async function main() {
         label: agent.label,
         description: agent.description,
         stage: agent.stage,
+        modelId: agent.modelId,
+        provider: agent.provider,
+        temperature: agent.temperature,
+        maxTokens: agent.maxTokens,
+        timeoutMs: agent.timeoutMs,
+        enabled: agent.enabled,
       },
     })
     console.log(`  [OK] ${row.label} (${row.key}) → ${row.provider}/${row.modelId}`)
