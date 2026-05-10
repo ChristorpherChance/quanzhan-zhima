@@ -2,12 +2,16 @@
 
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
+import { useMemo } from "react"
+import { injectMermaidTheme } from "@/lib/markdown/mermaid-theme"
 
 interface MarkdownViewProps {
   content: string
 }
 
 export function MarkdownView({ content }: MarkdownViewProps) {
+  const themedContent = useMemo(() => injectMermaidTheme(content, "light"), [content])
+
   return (
     <article className="prose prose-slate max-w-none
       prose-headings:font-semibold prose-headings:tracking-tight
@@ -39,7 +43,7 @@ export function MarkdownView({ content }: MarkdownViewProps) {
           ),
         }}
       >
-        {content}
+        {themedContent}
       </ReactMarkdown>
     </article>
   )

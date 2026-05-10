@@ -99,7 +99,10 @@ const DB_PROMPT = `# 角色
    - 使用 DATETIME 作为时间类型
 3. **字段说明表** — Markdown 表格说明每个字段的含义
 
-确保 DDL 可以直接在 SQLite 中执行。`
+确保 DDL 可以直接在 SQLite 中执行。
+
+# 注意
+请勿在 \`\`\`mermaid 块开头写 \`%%{init: …}%%\` 头，由渲染器统一注入。`
 
 // J0: shell 阶段 — 只产出骨架 + 设计令牌 + 路由占位
 export const UI_SHELL_PROMPT = `# 角色

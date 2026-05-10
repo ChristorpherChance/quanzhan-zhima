@@ -3,12 +3,15 @@
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import rehypeRaw from "rehype-raw"
-import { useState } from "react"
+import { useState, useMemo } from "react"
 import { MermaidBlock } from "./MermaidBlock"
 import { Button } from "@/components/ui/button"
+import { injectMermaidTheme } from "@/lib/markdown/mermaid-theme"
 
 export function MarkdownView({ source, title }: { source: string; title?: string }) {
   const [mode, setMode] = useState<"render" | "source">("render")
+  // J9: 注入 mermaid 配色（默认 light；后续接 useTheme 可切换 dark）
+  const themedSource = useMemo(() => injectMermaidTheme(source, "light"), [source])
 
   return (
     <div className="flex flex-col gap-2">
@@ -57,7 +60,7 @@ export function MarkdownView({ source, title }: { source: string; title?: string
               },
             }}
           >
-            {source}
+            {themedSource}
           </ReactMarkdown>
         </div>
       )}
