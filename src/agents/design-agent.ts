@@ -7,8 +7,9 @@ import { log } from "@/lib/log"
 import { J } from "@/lib/db/json"
 import type { AgentRunCtx } from "@/agents/types"
 import { DESIGN_SYSTEM } from "@/agents/prompts/design"
+import { reopenFromGate } from "@/lib/hitl/gates"
 
-const DESIGN_ORDER = ["summary", "api", "db", "detail", "ui"] as const
+const DESIGN_ORDER = ["summary", "detail", "api", "db", "ui"] as const
 const PRIOR_CONTEXT_LIMIT = 8000
 
 async function appendPlan(projectId: string, entry: string) {
@@ -159,6 +160,7 @@ export async function generate(
 
     // 更新 PLAN.md
     await appendPlan(ctx.projectId, `设计生成: ${subtype} (${content.length} 字符)`)
+    void reopenFromGate(ctx.projectId, "G2").catch(() => {})
 
     ctx.send("result", { subtype, filePath: outputPath, length: content.length })
     log("agent", `design:generate done subtype=${subtype} length=${content.length}`)
@@ -277,4 +279,28 @@ export async function edit(
     ctx.send("error", { code: "E_LLM_FAILED", message: msg })
     throw e
   }
+}
+
+// J2: UI 原型自检 — 10 项检查清单，score < 70 自动补写
+export async function selfCheckUi(html: string): Promise<{ score: number; missing: string[] }> {
+  const CHECKLIST: Array<[string, RegExp | ((h: string) => boolean)]> = [
+    ["含 design tokens CSS 变量", /:root\s*\{[^}]*--/],
+    ["含 mock 数据 ≥12 条", (h: string) => (h.match(/id\s*:\s*['\"][\w-]+/g)?.length ?? 0) >= 12],
+    ["含命令面板", /cmd\+k|command\s+palette/i],
+    ["含主题切换", /toggle.*theme|dark[-\s]?mode/i],
+    ["含语言切换", /i18n|locale|switch.*lang/i],
+    ["含分页", /pagination|page-(prev|next)/i],
+    ["含空状态", /empty[-\s]?state|暂无|没有数据/i],
+    ["页面分隔注释", /<!--\s*PAGE:/],
+    ["END_UI 标记", /<!--\s*END_UI\s*-->/],
+    ["a11y aria-*", /aria-/],
+  ]
+  const missing: string[] = []
+  let score = 0
+  for (const [name, m] of CHECKLIST) {
+    const ok = typeof m === "function" ? m(html) : m.test(html)
+    if (ok) score += 10
+    else missing.push(name)
+  }
+  return { score, missing }
 }

@@ -6,9 +6,9 @@ import { NextRequest } from "next/server"
 
 export const maxDuration = 1800
 
-const DESIGN_ORDER = ["summary", "api", "db", "detail", "ui"] as const
+const DESIGN_ORDER = ["summary", "detail", "api", "db", "ui"] as const
 const LABELS: Record<string, string> = {
-  summary: "概要设计", api: "接口设计", db: "数据库设计", detail: "详细设计", ui: "UI原型",
+  summary: "概要设计", detail: "详细设计", api: "接口设计", db: "数据库设计", ui: "UI原型",
 }
 
 export const POST = withErrorBoundary(async (

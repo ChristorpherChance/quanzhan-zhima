@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db/prisma"
 import { chat } from "@/lib/llm/gateway"
 import { log } from "@/lib/log"
 import type { GateType } from "@/lib/hitl/gates"
+import { loadAgentConfig } from "@/agents/registry"
 
 /** LLM-based confidence scorer (existing, for fallback) */
 export async function confidenceFor(
@@ -9,6 +10,7 @@ export async function confidenceFor(
   gateType: string,
 ): Promise<number> {
   try {
+    const cfg = await loadAgentConfig("review")
     const r = await chat({
       task: "review",
       messages: [
@@ -24,8 +26,8 @@ export async function confidenceFor(
           content: `项目 ${projectId} 的 Gate ${gateType} 产物已生成。请评分。`,
         },
       ],
-      temperature: 0.1,
-      maxTokens: 256,
+      temperature: cfg.temperature,
+      maxTokens: cfg.maxTokens,
     })
     const parsed = JSON.parse(r.text) as { score: number }
     return typeof parsed.score === "number" ? parsed.score : 0.5

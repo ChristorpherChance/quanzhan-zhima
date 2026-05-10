@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
+import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { toast } from "@/components/ui/toast"
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
@@ -202,6 +203,21 @@ export default function SettingsPage() {
           <Button onClick={handleSave} disabled={loading}>
             {loading ? "保存中..." : "保存设置"}
           </Button>
+        </CardContent>
+      </Card>
+
+      {/* Agent Settings */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Agent 配置</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground mb-3">
+            管理各阶段 Agent 的模型、参数和超时配置。
+          </p>
+          <Link href="/settings/agents">
+            <Button variant="outline" size="sm">管理 Agent 设置</Button>
+          </Link>
         </CardContent>
       </Card>
 

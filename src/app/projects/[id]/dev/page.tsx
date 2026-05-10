@@ -9,7 +9,8 @@ import { AgentChat, type AgentChatHandle } from "@/components/workbench/agent-ch
 import { ThreePane } from "@/components/workbench/three-pane"
 import { StageNav } from "@/components/workbench/stage-nav"
 import { CodeBrowser } from "@/components/workbench/CodeBrowser"
-import { Wand2, Code, Eye } from "lucide-react"
+import { SandboxPanel } from "@/components/workbench/SandboxPanel"
+import { Wand2, Code, Play } from "lucide-react"
 
 export default function DevPage() {
   const params = useParams()
@@ -18,9 +19,10 @@ export default function DevPage() {
   const [sandboxUrl, setSandboxUrl] = useState<string | null>(null)
   const [jobId, setJobId] = useState<string | null>(null)
   const [stage, setStage] = useState<"idle" | "generating" | "sandbox-starting" | "ready">("idle")
-  const [viewMode, setViewMode] = useState<"code" | "preview">("code")
+  const [viewMode, setViewMode] = useState<"code" | "run">("run")
   const [project, setProject] = useState<{ currentStage: string; name: string } | null>(null)
   const [gates, setGates] = useState<Array<{ type: string; status: string }>>([])
+  const [sandboxLogs, setSandboxLogs] = useState<string[]>([])
   const chatRef = useRef<AgentChatHandle>(null)
 
   useEffect(() => {
@@ -53,7 +55,6 @@ export default function DevPage() {
   }
 
   const handleJobDone = useCallback(async () => {
-    // Code generation done, now start sandbox
     setStage("sandbox-starting")
     setJobId(null)
     try {
@@ -61,10 +62,12 @@ export default function DevPage() {
       const sd = await sr.json()
       if (sd.data?.url) {
         setSandboxUrl(sd.data.url)
+        setSandboxLogs(sd.data?.logs ?? [])
         setStage("ready")
         toast({ title: "沙箱已启动" })
       } else {
-        toast({ title: "沙箱启动失败", description: "未返回 URL", variant: "destructive" })
+        setSandboxLogs(sd.data?.logs ?? [String(sd.data?.error ?? "未知错误")])
+        toast({ title: "沙箱启动失败", description: "查看日志了解详情", variant: "destructive" })
         setStage("idle")
       }
     } catch (e: unknown) {
@@ -74,6 +77,28 @@ export default function DevPage() {
       setLoading(false)
     }
   }, [pid])
+
+  const handleRestartSandbox = async () => {
+    setStage("sandbox-starting")
+    try {
+      // stop first
+      await fetch(`/api/projects/${pid}/dev/sandbox/stop`, { method: "POST" })
+      // then restart
+      const sr = await fetch(`/api/projects/${pid}/dev/sandbox/run`, { method: "POST" })
+      const sd = await sr.json()
+      if (sd.data?.url) {
+        setSandboxUrl(sd.data.url)
+        setSandboxLogs(sd.data?.logs ?? [])
+        setStage("ready")
+      } else {
+        setSandboxLogs(sd.data?.logs ?? [])
+        setStage("idle")
+      }
+    } catch (e: unknown) {
+      toast({ title: "重启失败", description: String((e as Error)?.message ?? e), variant: "destructive" })
+      setStage("idle")
+    }
+  }
 
   const handleChatSend = useCallback(async (text: string) => {
     setLoading(true)
@@ -96,6 +121,7 @@ export default function DevPage() {
   const handleStop = async () => {
     await fetch(`/api/projects/${pid}/dev/sandbox/stop`, { method: "POST" })
     setSandboxUrl(null)
+    setSandboxLogs([])
     setStage("idle")
   }
 
@@ -176,8 +202,17 @@ export default function DevPage() {
           <div className="flex-1 min-h-0">
             {stage === "ready" && sandboxUrl ? (
               <div className="flex flex-col h-full">
-                {/* 视图切换 tab */}
+                {/* J4: 运行/代码 顶层 Tab */}
                 <div className="flex items-center gap-1 px-3 py-1 border-b">
+                  <Button
+                    variant={viewMode === "run" ? "default" : "ghost"}
+                    size="sm"
+                    className="h-7 text-xs gap-1"
+                    onClick={() => setViewMode("run")}
+                  >
+                    <Play className="w-3 h-3" />
+                    运行
+                  </Button>
                   <Button
                     variant={viewMode === "code" ? "default" : "ghost"}
                     size="sm"
@@ -187,21 +222,17 @@ export default function DevPage() {
                     <Code className="w-3 h-3" />
                     代码
                   </Button>
-                  <Button
-                    variant={viewMode === "preview" ? "default" : "ghost"}
-                    size="sm"
-                    className="h-7 text-xs gap-1"
-                    onClick={() => setViewMode("preview")}
-                  >
-                    <Eye className="w-3 h-3" />
-                    预览
-                  </Button>
                 </div>
                 <div className="flex-1 min-h-0">
-                  {viewMode === "code" ? (
-                    <CodeBrowser projectId={pid} sandboxUrl={sandboxUrl} />
+                  {viewMode === "run" ? (
+                    <SandboxPanel
+                      projectId={pid}
+                      sandboxUrl={sandboxUrl}
+                      logs={sandboxLogs}
+                      onRestart={handleRestartSandbox}
+                    />
                   ) : (
-                    <iframe src={sandboxUrl} className="w-full h-full border-0" title="Sandbox Preview" />
+                    <CodeBrowser projectId={pid} sandboxUrl={sandboxUrl} />
                   )}
                 </div>
               </div>
@@ -213,6 +244,7 @@ export default function DevPage() {
             ) : stage === "sandbox-starting" ? (
               <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2">
                 <p>正在启动沙箱环境...</p>
+                <p className="text-xs">执行 install → build → start</p>
               </div>
             ) : (
               <div className="flex items-center justify-center h-full text-muted-foreground">

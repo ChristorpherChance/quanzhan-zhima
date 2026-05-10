@@ -5,6 +5,7 @@ import { J } from "@/lib/db/json"
 import { chat } from "@/lib/llm/gateway"
 import { piSessionPool } from "@/lib/pi/session-manager"
 import type { AgentRunCtx } from "@/agents/types"
+import { loadAgentConfig } from "@/agents/registry"
 import { execSync } from "node:child_process"
 import fs from "node:fs/promises"
 import path from "node:path"
@@ -37,6 +38,7 @@ function toolAvailable(cwd: string, bin: string): boolean {
 }
 
 async function summarizeWithLlm(results: Record<string, unknown>) {
+  const cfg = await loadAgentConfig("review")
   const summary = await chat({
     task: "review",
     messages: [
@@ -49,8 +51,8 @@ async function summarizeWithLlm(results: Record<string, unknown>) {
       },
       { role: "user", content: JSON.stringify(results) },
     ],
-    temperature: 0.2,
-    maxTokens: 2048,
+    temperature: cfg.temperature,
+    maxTokens: cfg.maxTokens,
   })
   return summary.text
 }
@@ -62,7 +64,7 @@ export async function runReview(ctx: AgentRunCtx, scope: string[]): Promise<void
 
   if (scope.includes("lint")) {
     ctx.send("log", { line: "跑 eslint..." })
-    const eslintConfigs = ["eslint.config.js", "eslint.config.mjs", "eslint.config.cjs", ".eslintrc.js", ".eslintrc.json"]
+    const eslintConfigs = ["eslint.config.js", "eslint.config.mjs", "eslint.config.cjs", ".eslintrc.js", ".eslintrc.cjs", ".eslintrc.json"]
     let hasEslintConfig = false
     for (const cfg of eslintConfigs) {
       try { await fs.access(path.join(ws, cfg)); hasEslintConfig = true; break } catch { /* continue */ }
@@ -70,8 +72,13 @@ export async function runReview(ctx: AgentRunCtx, scope: string[]): Promise<void
     if (toolAvailable(ws, "eslint") && hasEslintConfig) {
       const r = await execIn(ws, "npx --no-install eslint . --max-warnings=0 2>&1")
       out.lint = r.exitCode === 0 ? "passed" : { exitCode: r.exitCode, stdout: r.stdout?.slice(0, 2000), stderr: r.stderr?.slice(0, 1000) }
+    } else if (!hasEslintConfig) {
+      // J5: platform fallback — use npx --yes eslint@9 with basic rules
+      ctx.send("log", { line: "无 eslint config，使用 platform fallback..." })
+      const r = await execIn(ws, `npx --yes eslint@9 --no-eslintrc --rule '{"no-unused-vars":"warn"}' --ext .ts,.tsx,.js,.jsx . 2>&1`)
+      out.lint = r.exitCode === 0 ? "passed (platform fallback)" : { exitCode: r.exitCode, stdout: r.stdout?.slice(0, 2000), fallback: true }
     } else {
-      out.lint = { skipped: true, reason: hasEslintConfig ? "eslint not installed" : "no eslint config in workspace" }
+      out.lint = { skipped: true, reason: "eslint not installed" }
     }
   }
   if (scope.includes("types")) {
@@ -89,13 +96,20 @@ export async function runReview(ctx: AgentRunCtx, scope: string[]): Promise<void
   }
   if (scope.includes("audit")) {
     ctx.send("log", { line: "检查依赖审计..." })
-    // 仅当存在 lockfile 时才跑 audit
     try {
       await fs.access(path.join(ws, "pnpm-lock.yaml"))
       const r = await execIn(ws, "pnpm audit --json 2>&1")
       out.audit = r
     } catch {
-      out.audit = { skipped: true, reason: "no pnpm-lock.yaml in workspace" }
+      // J5: audit 兜底 — 生成 package-lock.json 后跑 npm audit
+      ctx.send("log", { line: "无 lockfile，尝试 npm install --package-lock-only..." })
+      const gen = await execIn(ws, "npm install --package-lock-only --silent 2>&1")
+      if (gen.exitCode === 0) {
+        const r = await execIn(ws, "npm audit --json 2>&1")
+        out.audit = { ...r, fallback: "npm-package-lock-only" }
+      } else {
+        out.audit = { skipped: true, reason: "无 lockfile 且无法生成 package-lock.json" }
+      }
     }
   }
   if (scope.includes("unit")) {
@@ -115,6 +129,21 @@ export async function runReview(ctx: AgentRunCtx, scope: string[]): Promise<void
 
   ctx.setPhase("reviewing", "LLM 分析审查结果")
   ctx.send("log", { line: "LLM 分析中..." })
+
+  // J5: 读取 code artifact meta 获取覆盖率与构建状态
+  const codeArtifact = await prisma.artifact.findFirst({
+    where: { projectId: ctx.projectId, type: "code" },
+    orderBy: { version: "desc" },
+  })
+  let codeMeta: Record<string, unknown> = {}
+  if (codeArtifact?.meta) {
+    try { codeMeta = JSON.parse(codeArtifact.meta as string) } catch { /* ignore */ }
+  }
+  Object.assign(out, {
+    _acCoverage: codeMeta.coverage ?? null,
+    _buildOk: codeMeta.builtOk ?? null,
+  })
+
   const markdown = await summarizeWithLlm(out)
   const hasP0 = /^- \[P0\]/m.test(markdown)
   const hasP1 = /^- \[P1\]/m.test(markdown)
@@ -182,14 +211,15 @@ export async function fixReview(ctx: AgentRunCtx, severityFilter: ("P0" | "P1")[
     await piSessionPool.followUp(ctx.projectId, instruction)
   } catch {
     ctx.send("log", { line: "Pi session 不可用，使用 LLM 生成修复方案" })
+    const cfg = await loadAgentConfig("review")
     const result = await chat({
       task: "code-fix",
       messages: [
         { role: "system", content: "你是代码修复 Agent。基于审查报告修复问题。输出完整修复后的文件内容。" },
         { role: "user", content: instruction + "\n\n审查报告:\n" + reportContent },
       ],
-      temperature: 0.1,
-      maxTokens: 4096,
+      temperature: cfg.temperature,
+      maxTokens: cfg.maxTokens,
     })
     ctx.send("log", { line: `修复方案: ${result.text.slice(0, 300)}...` })
   }
@@ -204,7 +234,10 @@ export async function fixReview(ctx: AgentRunCtx, severityFilter: ("P0" | "P1")[
     eslintR = await execIn(ws, "npx --no-install eslint . --max-warnings=0 2>&1")
   }
 
-  const fixed = (tscR.exitCode ?? 1) === 0 && (eslintR.exitCode ?? eslintR.skipped ? 0 : 1) === 0
+  // J5: 修复优先级 bug — 显式写出 eslintPassed 逻辑，避免 ?? 与 ?: 结合性陷阱
+  const eslintPassed = eslintR.exitCode === 0 || eslintR.skipped === true
+  const tscPassed = (tscR.exitCode ?? 1) === 0
+  const fixed = tscPassed && eslintPassed
 
   // 更新 review-report artifact 的修复状态
   const existingArtifact = await prisma.artifact.findFirst({
@@ -220,8 +253,8 @@ export async function fixReview(ctx: AgentRunCtx, severityFilter: ("P0" | "P1")[
           ...prevMeta,
           lastFixResult: {
             repaired: fixed,
-            tscPassed: (tscR.exitCode ?? 1) === 0,
-            eslintPassed: (eslintR.exitCode ?? 1) === 0 || eslintR.skipped,
+            tscPassed,
+            eslintPassed,
             fixedAt: new Date().toISOString(),
           },
         }),
@@ -231,7 +264,7 @@ export async function fixReview(ctx: AgentRunCtx, severityFilter: ("P0" | "P1")[
 
   ctx.send("result", {
     repaired: fixed,
-    tscPassed: (tscR.exitCode ?? 1) === 0,
-    eslintPassed: (eslintR.exitCode ?? 1) === 0 || eslintR.skipped,
+    tscPassed,
+    eslintPassed,
   })
 }

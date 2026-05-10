@@ -58,6 +58,13 @@ async function checkConditions(
                      existsSync(`${ws}/server.js`) ||
                      existsSync(`${ws}/package.json`)
     if (!hasEntry) reasons.push("工作区缺少入口文件")
+    // J8: 必须构建成功才能锁定 G3
+    if (code?.meta) {
+      try {
+        const meta = JSON.parse(code.meta as string)
+        if (meta.builtOk === false) reasons.push("代码构建未通过 (builtOk=false)")
+      } catch { /* meta 解析失败则跳过此检查 */ }
+    }
   } else if (gate === "G4") {
     // G4 审查→导出：审查报告已生成且无 P0 缺陷
     const report = await prisma.artifact.findFirst({
@@ -115,6 +122,21 @@ export async function reopenGate(
     where: { projectId_type: { projectId, type: gate } },
     data: { status: "reopened", reopenReason: reason },
   })
+}
+
+// J8: 重新生成产物时，反锁当前 + 后续所有 Gate
+const GATE_SEQUENCE: GateType[] = ["G0", "G1", "G2", "G3", "G4", "G5", "G6"]
+
+export async function reopenFromGate(projectId: string, fromGate: GateType) {
+  const startIdx = GATE_SEQUENCE.indexOf(fromGate)
+  if (startIdx < 0) return
+  for (let i = startIdx; i < GATE_SEQUENCE.length; i++) {
+    const g = GATE_SEQUENCE[i]
+    await prisma.gate.updateMany({
+      where: { projectId, type: g },
+      data: { status: "reopened", reopenReason: `产物重新生成 (触发于 ${fromGate})`, lockedAt: null },
+    })
+  }
 }
 
 /** Auto-evaluate: compute confidence for a gate and auto-lock if ≥ threshold */

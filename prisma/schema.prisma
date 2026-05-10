@@ -121,3 +121,23 @@ model Message {
 
   @@index([sessionId, ts])
 }
+
+// J6: Agent 注册表 — 数据驱动配置
+model AgentConfig {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  label       String
+  description String   @default("")
+  stage       String
+  modelId     String   @default("deepseek-chat")
+  provider    String   @default("deepseek")
+  temperature Float    @default(0.2)
+  maxTokens   Int      @default(4096)
+  timeoutMs   Int      @default(600000)
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([key])
+  @@index([stage])
+}

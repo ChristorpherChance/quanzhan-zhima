@@ -238,17 +238,30 @@ export function CodeBrowser({ projectId, sandboxUrl, className }: CodeBrowserPro
                 <Download className="w-3 h-3" />
               </Button>
               {sandboxUrl && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-6 text-[10px] gap-1"
-                  onClick={() => {
-                    if (sandboxFileUrl) window.open(sandboxFileUrl, "_blank")
-                  }}
-                >
-                  <ExternalLink className="w-3 h-3" />
-                  沙箱中打开
-                </Button>
+                selectedPath && selectedPath.endsWith(".html") ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-6 text-[10px] gap-1"
+                    onClick={() => {
+                      if (sandboxFileUrl) window.open(sandboxFileUrl, "_blank")
+                    }}
+                  >
+                    <ExternalLink className="w-3 h-3" />
+                    沙箱中打开
+                  </Button>
+                ) : (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 text-[10px] gap-1 text-muted-foreground"
+                    disabled
+                    title="非静态文件，不支持沙箱直链"
+                  >
+                    <ExternalLink className="w-3 h-3" />
+                    沙箱中打开
+                  </Button>
+                )
               )}
             </>
           ) : (

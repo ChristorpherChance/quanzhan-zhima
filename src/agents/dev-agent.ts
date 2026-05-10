@@ -4,7 +4,11 @@ import { log } from "@/lib/log"
 import { J } from "@/lib/db/json"
 import type { AgentRunCtx } from "@/agents/types"
 import { runPiSession } from "@/lib/pi/session"
+import { buildDevSystemPrompt, buildDevUserPrompt } from "@/agents/prompts/dev"
+import { reopenFromGate } from "@/lib/hitl/gates"
+import { loadAgentConfig } from "@/agents/registry"
 import fs from "node:fs/promises"
+import { execSync } from "node:child_process"
 
 export async function runDev(ctx: AgentRunCtx, instruction?: string): Promise<void> {
   const project = await prisma.project.findUniqueOrThrow({ where: { id: ctx.projectId } })
@@ -20,23 +24,30 @@ export async function runDev(ctx: AgentRunCtx, instruction?: string): Promise<vo
     return
   }
 
-  const prompt = instruction ?? "请开始按系统提示完成任务。"
+  // J3: 构建包含 PRD + 5 设计产物的系统提示词
+  ctx.setPhase("thinking", "加载 PRD 与设计产物")
+  const systemPrompt = await buildDevSystemPrompt(ctx.projectId)
+  const userPrompt = buildDevUserPrompt(instruction)
   ctx.send("log", { line: `Pi 启动: ${workspaceDir}` })
+
+  // J6: 从注册表加载 dev agent 配置
+  const devCfg = await loadAgentConfig("dev")
 
   // Token accumulators
   let tokenIn = 0
   let tokenOut = 0
+  let piOk = false
 
   try {
     const r = await runPiSession({
       projectId: project.id,
       workspaceDir,
-      prompt,
-      provider: "deepseek",
-      modelId: "deepseek-chat",
-      timeoutMs: 240_000,
+      prompt: userPrompt,
+      provider: devCfg.provider as "deepseek" | "anthropic" | "kimi" | "xiaomi" | "openai",
+      modelId: devCfg.modelId,
+      timeoutMs: devCfg.timeoutMs,
+      systemPromptOverride: systemPrompt, // J3: 注入完整上下文
       onEvent: (e) => {
-        // 追踪 phase 变化
         switch (e.type) {
           case "tool_start":
             ctx.setPhase("tool_running", `执行 ${(e.data as { name?: string })?.name ?? "工具"}`)
@@ -51,7 +62,6 @@ export async function runDev(ctx: AgentRunCtx, instruction?: string): Promise<vo
             ctx.setPhase("writing", "生成代码")
             break
         }
-        // 累加 token（如果 Pi 事件包含 usage 信息）
         const data = e.data as Record<string, unknown> | undefined
         if (data?.usage) {
           const u = data.usage as { input_tokens?: number; output_tokens?: number }
@@ -62,6 +72,7 @@ export async function runDev(ctx: AgentRunCtx, instruction?: string): Promise<vo
         ctx.send(e.type as "log" | "result" | "error" | "text_delta" | "thinking_delta" | "tool_start" | "tool_update" | "tool_end", e.data)
       },
     })
+    piOk = r.ok
     if (!r.ok) {
       ctx.send("log", { line: "Pi 失败，进入 fallback：直接 chat 拉模板。" })
       await fallbackTemplateBuild(ctx, workspaceDir)
@@ -71,21 +82,53 @@ export async function runDev(ctx: AgentRunCtx, instruction?: string): Promise<vo
     await fallbackTemplateBuild(ctx, workspaceDir)
   }
 
+  // J3.3: 构建自检 — 仅当 Pi 成功时执行
+  let builtOk = false
+  if (piOk) {
+    ctx.setPhase("reviewing", "构建自检")
+    ctx.send("log", { line: "--- 构建自检 ---" })
+
+    const install = execIn(workspaceDir, "pnpm install --no-frozen-lockfile 2>&1", 10 * 60_000)
+    ctx.send("log", { line: install.ok ? "✓ pnpm install" : `✗ pnpm install:\n${install.out.slice(-1500)}` })
+
+    if (install.ok) {
+      const build = execIn(workspaceDir, "pnpm exec next build 2>&1 || pnpm exec tsc --noEmit 2>&1", 10 * 60_000)
+      builtOk = build.ok
+      ctx.send("log", { line: build.ok ? "✓ build" : `✗ build:\n${build.out.slice(-1500)}` })
+    }
+  }
+
+  // J3.4: AC 覆盖率
+  let coverage: number | null = null
+  let coverageMd = ""
+  try {
+    coverageMd = await fs.readFile(`${workspaceDir}/COVERAGE.md`, "utf-8")
+  } catch { /* 缺失 */ }
+  if (coverageMd) {
+    // 读取 PRD 统计总 AC 数
+    let prdContent = ""
+    try { prdContent = await fs.readFile(paths.prd(ctx.projectId), "utf-8") } catch { /* ignore */ }
+    const totalAcs = (prdContent.match(/AC[\d.]+/gi) ?? []).length
+    const coveredAcs = (coverageMd.match(/AC[\d.]+/gi) ?? []).length
+    coverage = totalAcs > 0 ? Math.round((coveredAcs / totalAcs) * 100) : null
+  }
+
   // Upsert code artifact
   const existing = await prisma.artifact.findFirst({
     where: { projectId: ctx.projectId, type: "code" },
     orderBy: { version: "desc" },
   })
-  // 统计文件数
   let filesCount = 0
   try { filesCount = (await fs.readdir(workspaceDir)).length } catch { /* ignore */ }
+  const meta = { entry: "index.html", filesCount, builtOk, coverage }
+
   if (existing && !existing.locked) {
     await prisma.artifact.update({
       where: { id: existing.id },
       data: {
         storagePath: workspaceDir,
         version: existing.version + 1,
-        meta: J.stringify({ entry: "index.html", filesCount }),
+        meta: J.stringify(meta),
       },
     })
   } else {
@@ -95,12 +138,15 @@ export async function runDev(ctx: AgentRunCtx, instruction?: string): Promise<vo
         type: "code",
         version: (existing?.version ?? 0) + 1,
         storagePath: workspaceDir,
-        meta: J.stringify({ entry: "index.html", filesCount }),
+        meta: J.stringify(meta),
       },
     })
   }
 
-  ctx.send("result", { workspaceDir, filesCount })
+  ctx.send("result", { workspaceDir, filesCount, builtOk, coverage })
+
+  // J8: 代码重新生成后反锁 G3 及后续 Gate
+  void reopenFromGate(ctx.projectId, "G3").catch(() => {})
 
   // 自动停止旧沙箱，提示用户重新预览
   try {
@@ -109,6 +155,19 @@ export async function runDev(ctx: AgentRunCtx, instruction?: string): Promise<vo
     ctx.send("log", { line: "已停止旧沙箱，请点击预览自动重启查看新代码" })
   } catch {
     ctx.send("log", { line: "代码已生成，点击预览查看" })
+  }
+}
+
+// J3.3: 工作区内的命令执行器
+function execIn(cwd: string, cmd: string, ms = 5 * 60_000): { ok: boolean; out: string } {
+  try {
+    const out = execSync(cmd, { cwd, stdio: "pipe", timeout: ms, encoding: "utf-8" })
+    return { ok: true, out: out.toString() }
+  } catch (e: any) {
+    return {
+      ok: false,
+      out: ((e as any)?.stdout?.toString?.() ?? "") + ((e as any)?.stderr?.toString?.() ?? ""),
+    }
   }
 }
 
@@ -126,7 +185,6 @@ async function fallbackTemplateBuild(ctx: AgentRunCtx, workspaceDir: string): Pr
     await copyDir(skeletonDir, workspaceDir)
     ctx.send("log", { line: "fallback: 骨架模板已复制" })
   } catch {
-    // 如果骨架目录不存在，动态生成最小可运行项目
     ctx.send("log", { line: "fallback: 无骨架模板，动态生成最小项目" })
     try {
       await fs.writeFile(`${workspaceDir}/package.json`, JSON.stringify({

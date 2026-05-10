@@ -3,11 +3,11 @@
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
-import { MarkdownView } from "@/components/markdown"
+import { MarkdownView } from "@/components/workbench/MarkdownView"
 import { VersionSelector } from "@/components/workbench/version-selector"
 import { DownloadButton } from "@/components/workbench/download-button"
 import { ArtifactEditor } from "@/components/workbench/artifact-editor"
-import { UiPrototypeFrame } from "@/components/workbench/ui-prototype-frame"
+import { UiPrototypeViewer } from "@/components/workbench/UiPrototypeViewer"
 import { Badge } from "@/components/ui/badge"
 import { Edit3 } from "lucide-react"
 
@@ -99,9 +99,9 @@ export function ArtifactViewer({
       </div>
       {content ? (
         artifactType === "design-ui" ? (
-          <UiPrototypeFrame htmlContent={content} />
+          <UiPrototypeViewer htmlSource={content} projectId={projectId} />
         ) : (
-          <MarkdownView content={content} />
+          <MarkdownView source={content} />
         )
       ) : (
         <div className="text-center text-muted-foreground py-12">

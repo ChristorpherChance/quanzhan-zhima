@@ -1,36 +1,66 @@
-export const DEV_PI_OVERRIDE = `# 角色
-你是**开发 Agent (Dev Agent)**，基于 PRD 和设计产出生成完整的前端工程代码。
+import fs from "node:fs/promises"
+import { paths } from "@/config/paths"
 
-# 技术栈
-- Next.js 14 (App Router)
-- TypeScript (strict mode)
-- Tailwind CSS
-- Prisma + SQLite
+const SUBTYPES = ["summary", "detail", "api", "db", "ui"] as const
+const MAX_PER_DOC = 12_000
+const MAX_PRD = 16_000
 
-# 工作流程
-1. 使用 read_artifact 工具读取 PRD (prd.md) 和所有设计产出 (design/summary.md, design/detail.md, design/api.md, design/db.md, design/ui.html)
-2. 在 workspaceDir 下生成完整的 Next.js 项目
-3. 执行 \`npm install --omit=optional\` 安装依赖
-4. 执行 \`npm run build\` 验证构建
+export async function buildDevSystemPrompt(projectId: string): Promise<string> {
+  const prdRaw = await fs.readFile(paths.prd(projectId), "utf-8").catch(() => "")
+  const designs: Record<string, string> = {}
+  for (const sub of SUBTYPES) {
+    const ext = sub === "ui" ? "html" : "md"
+    const p = `${paths.design(projectId)}/${sub}.${ext}`
+    try {
+      designs[sub] = (await fs.readFile(p, "utf-8")).slice(0, MAX_PER_DOC)
+    } catch { /* 缺失则跳过 */ }
+  }
 
-# 必须包含的文件
-- package.json — 依赖项: next@14, react@18, react-dom@18, typescript@5, tailwindcss@3, postcss, @prisma/client@5, prisma@5
-- tsconfig.json — strict mode, paths: {"@/*":["./src/*"]}
-- next.config.js — 标准配置
-- tailwind.config.ts — content: ["./src/**/*.{ts,tsx}"]
-- postcss.config.js
-- prisma/schema.prisma — 按 design/db.md 的 DDL 转换为 Prisma schema (SQLite provider)
-- src/app/layout.tsx
-- src/app/page.tsx — 主页面
-- src/app/api/ — 所有 API 路由，严格按 design/api.md 实现
+  const designBlock = SUBTYPES
+    .map((s) =>
+      designs[s]
+        ? `## design-${s}\n\n${designs[s]}`
+        : `## design-${s}\n（未生成）`,
+    )
+    .join("\n\n---\n\n")
 
-# 红线（绝对不可违反）
-- **禁止使用模拟数据** — 所有数据必须通过 Prisma 从 SQLite 获取
-- **禁止硬编码端口** — 使用 process.env.PORT 获取端口号
-- **只能使用 workspace_write 写入文件** — 不要使用其他文件写入方式
-- **必须实现所有 API 路由** — PRD AC 中涉及的每个端点都必须实现
-- **必须运行 npm run build** — 确保代码可以正常构建
-- **读取设计产出后再编码** — 不要凭记忆编写，必须先用 read_artifact 读取所有设计文档
+  return `# 角色
+你是开发 Agent。任务：基于下方 PRD + 设计产物，**在 workspace 目录中产出一个可直接 \`npm run build && npm start\` 的真实应用**，完整覆盖所有 AC。
 
-# 输出
-编码完成后，使用 workspace_list 输出完整的文件列表。`
+# 红线
+- 必须严格实现 PRD 的全部 AC（不少于 80%），任何被跳过的 AC 在末尾 \`COVERAGE.md\` 中说明原因。
+- API 必须与 design-api 一一对应（路径、方法、入参、出参、错误码）。
+- 数据模型必须与 design-db 完全一致（表名、字段、类型、外键、索引）。
+- UI 必须与 design-ui 视觉与交互保持一致；可以转 React 组件，但页面数、主要组件、状态、空错态、主题/语言切换必须保留。
+- 仅可使用：Next.js 14 App Router + TypeScript + Tailwind + shadcn/ui + better-sqlite3 + zod。
+- 必须自己生成：\`package.json\`、\`tsconfig.json\`、\`next.config.mjs\`、\`tailwind.config.ts\`、\`postcss.config.mjs\`、\`eslint.config.mjs\`、\`.gitignore\`、\`README.md\`、\`pnpm-lock.yaml\`（用 \`pnpm install\` 自动生成）。
+- 必须 \`pnpm install\` + \`pnpm exec next build\` 全过；构建产物可以 \`npm start\`。
+
+# 工程结构（强制）
+- \`app/\` Next.js 路由
+- \`components/\` UI 组件（按 shadcn 风格）
+- \`lib/db.ts\` SQLite 连接 + 迁移
+- \`lib/api/\` 业务封装
+- \`tests/\` vitest 测试，至少覆盖 3 条核心 AC
+
+# 输出节奏
+1. 先输出 \`PLAN.md\` 列出文件清单与建立顺序。
+2. 按顺序 \`workspace_write\` 写文件；写完一组后跑一次 \`workspace_exec pnpm install\` / \`pnpm exec next build\` 自检。
+3. 每次自检失败立即修复；连续 2 次失败需在 PLAN.md 标注 BLOCKED。
+4. 最后写 \`COVERAGE.md\` 列出每条 AC 对应的代码位置。
+
+# 上下文：PRD
+
+${prdRaw.slice(0, MAX_PRD)}
+
+# 上下文：设计产物
+
+${designBlock}`
+}
+
+export function buildDevUserPrompt(extra?: string): string {
+  return (
+    extra?.trim() ||
+    "请按系统提示开始构建项目。先输出 PLAN.md，再按计划写文件。"
+  )
+}

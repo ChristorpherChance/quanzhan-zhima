@@ -1,8 +1,9 @@
 import { withErrorBoundary } from "@/lib/errors"
-import { startSandbox, getRunning } from "@/lib/sandbox"
+import { startSandbox, getRunning, detectStartCommand } from "@/lib/sandbox"
 import { prisma } from "@/lib/db/prisma"
 import { paths } from "@/config/paths"
 import { existsSync, mkdirSync, copyFileSync, readdirSync } from "node:fs"
+import { execSync } from "node:child_process"
 import { NextRequest } from "next/server"
 
 function copyDirSync(src: string, dest: string) {
@@ -39,6 +40,18 @@ function mountPreviewPrototype(projectId: string, workspaceDir: string) {
   }
 }
 
+function execIn(cwd: string, cmd: string, ms = 10 * 60_000): { ok: boolean; out: string } {
+  try {
+    const out = execSync(cmd, { cwd, stdio: "pipe", timeout: ms, encoding: "utf-8" })
+    return { ok: true, out: out.toString() }
+  } catch (e: any) {
+    return {
+      ok: false,
+      out: ((e as any)?.stdout?.toString?.() ?? "") + ((e as any)?.stderr?.toString?.() ?? ""),
+    }
+  }
+}
+
 export const POST = withErrorBoundary(async (
   _req: NextRequest,
   { params }: { params: { id: string } },
@@ -64,24 +77,56 @@ export const POST = withErrorBoundary(async (
   ensureSkeletonWorkspace(workspaceDir)
   mountPreviewPrototype(params.id, workspaceDir)
 
-  // 创建 sandbox-run Job 占位（修复 G3 永远过不了的硬 bug）
+  // J4: 检测启动命令
+  const cmds = detectStartCommand(workspaceDir)
+  const logs: string[] = []
+
+  // 创建 sandbox-run Job
   const job = await prisma.job.create({
     data: { projectId: params.id, agentType: "dev", type: "sandbox-run", status: "running" },
   })
 
   try {
+    // J4: 三段式 install → build → start
+    if (cmds.install) {
+      logs.push(`[install] ${cmds.install}`)
+      const r = execIn(workspaceDir, cmds.install, 10 * 60_000)
+      logs.push(r.ok ? "✓ install 完成" : `✗ install 失败:\n${r.out.slice(-2000)}`)
+    }
+
+    if (cmds.build) {
+      logs.push(`[build] ${cmds.build}`)
+      const r = execIn(workspaceDir, cmds.build, 10 * 60_000)
+      logs.push(r.ok ? "✓ build 完成" : `✗ build 失败:\n${r.out.slice(-2000)}`)
+      if (!r.ok) {
+        // build 失败但继续尝试启动（可能 dev 模式不需要 build）
+        logs.push("⚠ build 失败，尝试继续启动...")
+      }
+    }
+
+    logs.push(`[start] ${cmds.start}`)
+    // 替换骨架 server 路径（如需要）
+    const startCmd = cmds.start.replace("$SKELETON_SERVER", `${workspaceDir}/server.js`)
+
     const h = await startSandbox({
       projectId: params.id,
       workspaceDir,
-      command: "npm run dev",
+      command: startCmd,
     })
-    await prisma.job.update({ where: { id: job.id }, data: { status: "succeeded" } })
-    return { url: h.url, port: h.port, sandboxId: params.id, jobId: job.id }
-  } catch (e: unknown) {
+
+    logs.push(`✓ 沙箱已启动: ${h.url}`)
     await prisma.job.update({
       where: { id: job.id },
-      data: { status: "failed", logs: String((e as Error)?.message ?? e) },
+      data: { status: "succeeded", logs: logs.join("\n") },
     })
-    return { url: null, message: "sandbox unavailable, use export zip", error: String((e as Error)?.message ?? e) }
+    return { url: h.url, port: h.port, sandboxId: params.id, jobId: job.id, logs }
+  } catch (e: unknown) {
+    const errMsg = String((e as Error)?.message ?? e)
+    logs.push(`✗ 启动失败: ${errMsg}`)
+    await prisma.job.update({
+      where: { id: job.id },
+      data: { status: "failed", logs: logs.join("\n"), errorMsg: errMsg },
+    })
+    return { url: null, message: "sandbox unavailable, use export zip", error: errMsg, logs }
   }
 })
