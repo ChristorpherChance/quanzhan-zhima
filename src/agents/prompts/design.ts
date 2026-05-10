@@ -101,95 +101,73 @@ const DB_PROMPT = `# 角色
 
 确保 DDL 可以直接在 SQLite 中执行。`
 
-const UI_PROMPT = `# 角色
-你是**设计 Agent**，当前执行**UI 原型 (ui)** 设计。你必须产出一个**可直接在浏览器中交互的多页面 HTML 文件**，完整实现下列 7 大模块。
+// J0: shell 阶段 — 只产出骨架 + 设计令牌 + 路由占位
+export const UI_SHELL_PROMPT = `# 角色
+你是 UI 原型 Agent。本轮**只生成 HTML 骨架**，不要生成任何具体页面内容。
 
-# 技术栈（严格约束）
-- **Tailwind CSS CDN v3**: \`<script src="https://cdn.tailwindcss.com"></script>\`
-- **Alpine.js CDN**: \`<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>\`
-- **Lucide Icons CDN**: \`<script src="https://unpkg.com/lucide@latest"></script>\`
+# 必须输出（一份完整的 HTML，长度 ≤ 5000 字符）
+1. <!DOCTYPE html> + <head>（Tailwind CDN v3 + Alpine.js + Lucide Icons）
+2. <style> 中定义 :root 设计令牌（11 阶色板 / 7 字号 / 8 间距 / 4 圆角 / 4 阴影 / 3 动效）
+3. <body x-data="app()"> 全局 store：currentPage / theme / locale / mockData(>=12 条)
+4. 顶部 Header（产品名 + 主导航 + cmd+k 入口 + 主题切换 + 语言切换 + 用户菜单）
+5. <main id="page-root"></main> —— 6 个空占位 div，id 分别为 page-dashboard / page-list / page-detail / page-create-edit / page-settings / page-empty-error，初始 hidden
+6. 命令面板 Modal（cmd+k）骨架
+7. <script> Alpine init + hashchange 路由 + i18n 切换 + theme 切换
+
+# 末尾必须输出：<!-- END:ui-shell -->`
+
+// J0: page 阶段 — 只生成单个页面
+export function UI_PAGE_PROMPT(page: string): string {
+  return `# 角色
+你是 UI 原型 Agent。本轮**只生成 \`${page}\` 一个页面**的 HTML 片段。
+
+# 输入
+- 上一轮已生成的 shell（含设计令牌、nav、mock 数据），你**复用**其中的 CSS 变量、组件 class、mock 数据 key。
+- 必须读取的 PRD（已注入 user message）。
+
+# 模板基线
+你必须先以 ui_template_pack(${page}) 的返回为骨架，再围绕 PRD 的 AC 替换占位文案与字段名。
+
+# 输出格式（严格）
+<!-- PAGE:${page} -->
+<div id="page-${page}" x-show="currentPage==='${page}'" class="...">
+  ...完整页面内容（≥80 个 DOM 节点）...
+</div>
+<!-- /PAGE:${page} -->
+<!-- END:ui-${page} -->
+
+# 必须实现的交互（按页面挑相关项）
+- 表单校验（内联错误） / 模态框 / 抽屉 / Toast / 表格排序筛选 / Tab / 骨架屏 / 分页 / 批量操作 / 空错态
+- 所有交互元素带 aria-* + 键盘可达
+- 禁止 Lorem ipsum；文案必须围绕 PRD AC
+
+# 长度上限
+单页 ≤ 6000 字符。如确需更多，先输出主要结构 + <!-- END:ui-${page} -->，留待自愈轮补全。`
+}
+
+// 整体规格说明（仅作 system 参考，不再要求一轮输出全部）
+const UI_SPEC_PROMPT = `# UI 原型整体规格
+## 技术栈
+- Tailwind CSS CDN v3 + Alpine.js CDN + Lucide Icons CDN
 - 零构建依赖，直接在浏览器中打开即可运行
-- 禁止使用 React/Vue 编译产物
 
-# 内置方法论（7 大模块，必须严格按序实现）
+## 7 大模块
+1. 信息架构 (IA)：全局导航 / 主操作区 / 次操作区 / 状态展示 / 帮助说明
+2. 设计令牌 (Design Tokens)：:root 中定义 11 阶色板 + 7 字号 + 8 间距 + 4 圆角 + 4 阴影 + 3 动效
+3. 组件库映射：Button / Input / Select / Dialog / Drawer / Tabs / Table / Card / Badge / Toast / Skeleton / Tooltip / DropdownMenu / Pagination / EmptyState / ErrorBoundary
+4. 页面模板：PageHeader + Toolbar + Content + Footer/Pagination
+5. 可访问性 (a11y)：aria-* + 键盘可达 + 对比度 ≥ 4.5:1 + label 关联
+6. 响应式：4 断点 sm/md/lg/xl
+7. Mock 数据：≥12 条，含正常/边界/异常
 
-## 模块 1: 信息架构 (IA)
-5 段式结构：
-- **全局导航**：顶部固定，含产品名 + 主导航链接 + 命令面板入口 + 主题切换 + 语言切换 + 用户菜单
-- **主操作区**：核心业务操作的按钮组（新建、搜索、筛选、批量操作）
-- **次操作区**：表格/卡片/详情视图切换、排序控件
-- **状态展示**：统计卡片、进度条、时间线
-- **帮助说明**：底部固定或浮动的帮助按钮、快捷键提示
-每个页面必须在注释中标注其在 IA 中的位置。
+## ≥12 类交互
+页面导航 / 表单校验 / 模态框 / 抽屉 / Toast / 表格排序筛选 / Tab / 骨架屏 / 命令面板 / 全文搜索 / 批量操作 / 分页
 
-## 模块 2: 设计令牌 (Design Tokens)
-在 \`:root\` 中定义 CSS 变量：
-- 色板：primary/secondary/success/warning/danger/neutral 各含 50-950 共 11 阶
-- 字号：xs(12px) sm(14px) base(16px) lg(18px) xl(20px) 2xl(24px) 3xl(30px)
-- 间距：1(4px) 2(8px) 3(12px) 4(16px) 5(24px) 6(32px) 7(48px) 8(64px)
-- 圆角：sm(6px) md(10px) lg(14px) xl(20px)
-- 阴影：sm/md/lg/xl
-- 动效：timing-fast(150ms) timing-normal(300ms) timing-slow(500ms)
+## 6 页面
+dashboard / list / detail / create-edit / settings / empty-error
 
-## 模块 3: 组件库映射 (shadcn/ui 命名)
-使用 Tailwind class + Alpine.js 模拟以下组件：
-Button / Input / Select / Dialog / Drawer / Tabs / Table / Card / Badge / Toast / Skeleton / Tooltip / DropdownMenu / Pagination / EmptyState / ErrorBoundary
-每个组件必须有完整的交互状态（hover/focus/active/disabled/loading）。
-
-## 模块 4: 页面模板
-所有 list/detail 页套用：
-\`PageHeader(标题+面包屑+主操作)+Toolbar(筛选+搜索+视图切换)+Content(表格/卡片/详情)+Footer/Pagination\`
-
-## 模块 5: 可访问性 (a11y)
-- 所有交互元素带 \`aria-*\` 属性
-- 键盘可达（Tab/Esc/Enter）
-- 对比度 ≥ 4.5:1
-- 表单控件必须 \`<label>\` 关联
-
-## 模块 6: 响应式
-- 4 断点：sm(640px)/md(768px)/lg(1024px)/xl(1280px)
-- 表格 < md 转卡片视图
-- 侧边栏 < md 折叠为抽屉
-
-## 模块 7: Mock 数据规范
-- 从 PRD AC 中抽取实体名
-- 生成 ≥ 12 条假数据
-- 时间使用最近 30 天
-- 包含正常/边界/异常三类样本
-
-# 必须实现的 ≥12 类交互
-1. 页面导航(hash 路由)
-2. 表单校验(内联错误提示)
-3. 模态框(新增/编辑/确认删除)
-4. 抽屉(侧边详情面板)
-5. Toast 通知(自动消失)
-6. 表格排序/筛选
-7. Tab 切换
-8. 骨架屏/加载态
-9. 命令面板(cmd+k)
-10. 全文搜索
-11. 批量操作(多选+动作)
-12. 数据分页(page-prev/page-next)
-
-# 页面要求
-- 至少包含 6 个页面：**dashboard / list / detail / create-edit / settings / empty-error**
-- 每个页面至少 80 个 DOM 节点
-- 必须包含亮/暗主题切换按钮
-- 必须包含中/英语言切换（mock 即可）
-- 顶部 Header 含 "产品名 + 主导航 + 命令面板入口 + 主题切换 + 语言切换 + 用户菜单"
-- 禁止使用占位文字 "Lorem ipsum"，所有文案围绕 PRD 中的功能编写
-
-# 多页面格式
-使用 HTML 注释分隔不同页面：
-\`<!-- PAGE: 页面名称 -->\`
-  ...该页面的完整 HTML...
-\`<!-- /PAGE -->\`
-每个 \`<!-- PAGE: name -->\` 到 \`<!-- /PAGE -->\` 之间的内容为该页面的完整 HTML。
-
-# 输出
-一个完整的单文件 \`.html\`，从 \`<!DOCTYPE html>\` 开始。
-强制要求末尾输出完成标记：\`<!-- END_UI -->\`
-同时需要输出设计阶段标记：\`<!-- END:design-ui -->\``
+## 输出格式
+单文件 .html，<!-- PAGE:name -->...<!-- /PAGE --> 分隔，末尾 <!-- END_UI --> + <!-- END:design-ui -->`
 
 export function DESIGN_SYSTEM(subtype: string): string {
   const prompts: Record<string, string> = {
@@ -197,7 +175,7 @@ export function DESIGN_SYSTEM(subtype: string): string {
     detail: DETAIL_PROMPT,
     api: API_PROMPT,
     db: DB_PROMPT,
-    ui: UI_PROMPT,
+    ui: UI_SPEC_PROMPT,
   }
 
   const specific = prompts[subtype]

@@ -6,14 +6,16 @@ import { paths } from "@/config/paths"
 import { log } from "@/lib/log"
 import { J } from "@/lib/db/json"
 import type { AgentRunCtx } from "@/agents/types"
-import { DESIGN_SYSTEM } from "@/agents/prompts/design"
+import { DESIGN_SYSTEM, UI_SHELL_PROMPT, UI_PAGE_PROMPT } from "@/agents/prompts/design"
 import { RED_LINES_BLOCK } from "@/agents/prompts/_red-lines"
 import { stripMetaTalk } from "@/agents/utils/strip-meta"
 import { buildSystemPrompt, loadAgentConfig } from "@/agents/registry"
 import { reopenFromGate } from "@/lib/hitl/gates"
 import { runPiSession, type PiSessionEvent } from "@/lib/pi/session"
+import { UI_TEMPLATES } from "@/lib/pi/ui-templates"
 
 const DESIGN_ORDER = ["summary", "detail", "api", "db", "ui"] as const
+const UI_PAGES = ["dashboard", "list", "detail", "create-edit", "settings", "empty-error"] as const
 const PRIOR_CONTEXT_LIMIT = 8000
 
 async function appendPlan(projectId: string, entry: string) {
@@ -106,6 +108,147 @@ async function loadPriorContext(projectId: string, currentSubtype: string): Prom
   return parts.join("\n\n")
 }
 
+// ── J0.3 流式工具 ──────────────────────────────────────────────
+
+/** 单次流式调用（无续写），通过 ctx.send 推送 text_delta */
+async function streamWithMessages(
+  ctx: AgentRunCtx,
+  messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
+): Promise<string> {
+  const streamGen = stream({
+    task: "reason-heavy",
+    messages,
+  })
+
+  let buf = ""
+  for await (const event of streamGen) {
+    if (event.type === "delta" && event.text) {
+      buf += event.text
+      ctx.send("text_delta", { text: event.text })
+    } else if (event.type === "error") {
+      throw new Error(event.error ?? "stream error")
+    }
+  }
+  return buf
+}
+
+/** J0.3: assistant 角色续写策略 — 续写时不重发整段 user 内容 */
+async function streamOnceWithContinuation(
+  ctx: AgentRunCtx,
+  label: string,
+  system: string,
+  firstUser: string,
+  endRe: RegExp,
+  maxTries = 5,
+): Promise<string> {
+  let buf = ""
+  let messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
+    { role: "system", content: system },
+    { role: "user", content: firstUser },
+  ]
+  for (let i = 0; i < maxTries; i++) {
+    const piece = await streamWithMessages(ctx, messages)
+    buf += piece
+    if (endRe.test(buf)) break
+    // 续写：assistant 追加 buffer，user 只说"继续"
+    messages = [
+      { role: "system", content: system },
+      { role: "user", content: firstUser },
+      { role: "assistant", content: buf },
+      { role: "user", content: "继续输出剩余内容，禁止重复已输出部分；完成后输出 END 标记。" },
+    ]
+    ctx.send("progress", { phase: `${label}-continue`, message: `续写 ${i + 1}/${maxTries}` })
+  }
+  return buf
+}
+
+/** 单轮文本流式（用于 patch 等短任务），不触发续写 */
+async function streamOnceText(
+  ctx: AgentRunCtx,
+  label: string,
+  system: string,
+  user?: string,
+): Promise<string> {
+  const messages: Array<{ role: "system" | "user"; content: string }> = [
+    { role: "system", content: system },
+    ...(user ? [{ role: "user" as const, content: user }] : []),
+  ]
+  return streamWithMessages(ctx, messages)
+}
+
+// ── J0.2 Patch 工具 ────────────────────────────────────────────
+
+/** 解析 <patch insertAfter="CSS_SELECTOR">代码</patch> 并插入 HTML */
+function applyPatches(html: string, raw: string): string {
+  const re = /<patch\s+insertAfter="([^"]+)"\s*>([\s\S]*?)<\/patch>/g
+  let result = html
+  let match
+  while ((match = re.exec(raw)) !== null) {
+    const selector = match[1]
+    const code = match[2]
+    // 简易：在 selector 文本最后一次出现后插入
+    const idx = result.lastIndexOf(selector)
+    if (idx >= 0) {
+      const insertAt = idx + selector.length
+      result = result.slice(0, insertAt) + "\n" + code + result.slice(insertAt)
+    }
+  }
+  return result
+}
+
+// ── J0.2 主流程：UI 分页生成 ───────────────────────────────────
+
+async function generateUi(ctx: AgentRunCtx, projectId: string): Promise<string> {
+  const prdContent = await fs.readFile(paths.prd(projectId), "utf-8").catch(() => "")
+
+  // 1. Shell
+  ctx.send("progress", { phase: "design-ui-shell", message: "生成 UI 骨架..." })
+  let shell = await streamOnceWithContinuation(
+    ctx, "ui-shell",
+    UI_SHELL_PROMPT,
+    `PRD:\n${prdContent.slice(0, 8000)}\n\n请生成 HTML 骨架。`,
+    /<!--\s*END:ui-shell\s*-->/,
+  )
+
+  // 2. 6 页面
+  const pageBlocks: string[] = []
+  for (const p of UI_PAGES) {
+    ctx.send("progress", { phase: `design-ui-${p}`, message: `生成页面: ${p}` })
+    const tmpl = UI_TEMPLATES[p] ?? UI_TEMPLATES.list ?? ""
+    const userMsg = [
+      `PRD:\n${prdContent.slice(0, 8000)}`,
+      `上一轮已生成 shell（设计令牌 + 全局 store + 路由）：\n${shell.slice(0, 4000)}\n...(截断)`,
+      `ui_template_pack(${p}) 模板：\n${tmpl}`,
+      `请生成 ${p} 页面，遵循上述规则。`,
+    ].join("\n\n")
+    const block = await streamOnceWithContinuation(
+      ctx, `ui-${p}`,
+      UI_PAGE_PROMPT(p),
+      userMsg,
+      new RegExp(`<!--\\s*END:ui-${p}\\s*-->`),
+    )
+    pageBlocks.push(block)
+  }
+
+  // 3. 拼装
+  let assembled = shell.replace(
+    '<main id="page-root"></main>',
+    `<main id="page-root">\n${pageBlocks.join("\n\n")}\n</main>`,
+  )
+
+  // 4. 自检 + 补全（最多 2 轮）
+  for (let round = 0; round < 2; round++) {
+    const { score, missing } = await selfCheckUi(assembled)
+    if (score >= 70) break
+    ctx.send("progress", { phase: "design-ui-patch", message: `自检 ${score}/100，补全：${missing.join(", ")}` })
+    const patchPrompt = `你是 UI 修补 Agent。下方 HTML 缺以下要素，请仅返回 <patch insertAfter="CSS_SELECTOR">代码</patch> 形式的补丁列表，多条用换行分隔，禁止重写整页。\n缺项：${missing.join("，")}\n\nHTML（仅取相关 200 行）：\n${assembled.slice(0, 12000)}`
+    const patches = await streamOnceText(ctx, "design-ui-patch", patchPrompt)
+    assembled = applyPatches(assembled, patches)
+  }
+
+  return assembled
+}
+
 export async function generate(
   ctx: AgentRunCtx,
   subtype: string,
@@ -132,86 +275,75 @@ export async function generate(
     const priorContext = await loadPriorContext(ctx.projectId, subtype)
     const systemPrompt = await buildSystemPrompt("design", ctx.projectId, RED_LINES_BLOCK + "\n\n" + DESIGN_SYSTEM(subtype))
 
-    // 准备 workspace
-    const outputExt = getOutputExt(subtype)
-    const workspaceDir = join(paths.workspace(ctx.projectId), "design", subtype)
-    await fs.mkdir(workspaceDir, { recursive: true })
-    await fs.writeFile(join(workspaceDir, "PRD.md"), prdContent, "utf-8")
-    if (priorContext) {
-      await fs.writeFile(join(workspaceDir, "PRIOR_CONTEXT.md"), priorContext, "utf-8")
-    }
-
-    const contextFiles = ["PRD.md", ...(priorContext ? ["PRIOR_CONTEXT.md"] : [])].join("、")
-    const userMessage = `请先阅读 ${contextFiles}，然后生成 ${subtype} 设计产物，输出到 ${subtype}.${outputExt}。完成后必须追加 <!-- END:design-${subtype} --> 标记。`
-
-    // K6: 切 Pi 生成
-    const cfg = await loadAgentConfig("design")
+    // J0: UI 子类型走分页生成（shell → 6 pages → 装配 → 自愈补完）
     let content = ""
-    let piOk = false
-
-    try {
-      const r = await runPiSession({
-        projectId: ctx.projectId,
-        workspaceDir,
-        prompt: userMessage,
-        provider: cfg.provider as "deepseek" | "anthropic" | "kimi" | "xiaomi" | "openai",
-        modelId: cfg.modelId,
-        timeoutMs: cfg.timeoutMs,
-        systemPromptOverride: systemPrompt,
-        onEvent: (e: PiSessionEvent) => {
-          switch (e.type) {
-            case "tool_start":
-              ctx.setPhase("tool_running", `执行 ${(e.data as { name?: string })?.name ?? "工具"}`)
-              break
-            case "tool_end":
-              ctx.setPhase("writing", "写入文件")
-              break
-            case "thinking_delta":
-              ctx.setPhase("thinking", "思考中")
-              break
-            case "text_delta": {
-              const d = e.data as { text?: string }
-              if (d?.text) ctx.send("text_delta", { text: d.text })
-              break
-            }
-          }
-        },
-      })
-      piOk = r.ok
-      if (r.ok) {
-        try {
-          content = await fs.readFile(join(workspaceDir, `${subtype}.${outputExt}`), "utf-8")
-        } catch { content = "" }
-      }
-    } catch { /* Pi 失败，回退到流式 */ }
-
-    // Pi 失败时回退到 gateway.stream()
-    if (!piOk || !content) {
-      ctx.send("log", { line: `Pi 不可用，回退到传统流式生成 ${subtype}` })
-      let userMessageFallback = prdContent
+    if (subtype === "ui") {
+      content = await generateUi(ctx, ctx.projectId)
+    } else {
+      const outputExt = getOutputExt(subtype)
+      const workspaceDir = join(paths.workspace(ctx.projectId), "design", subtype)
+      await fs.mkdir(workspaceDir, { recursive: true })
+      await fs.writeFile(join(workspaceDir, "PRD.md"), prdContent, "utf-8")
       if (priorContext) {
-        userMessageFallback = `PRD 内容:\n\n${prdContent}\n\n---\n\n前置设计产物:\n\n${priorContext}\n\n请基于以上上下文生成 ${subtype} 设计。`
+        await fs.writeFile(join(workspaceDir, "PRIOR_CONTEXT.md"), priorContext, "utf-8")
       }
-      content = await streamOnceFallback(ctx, subtype, systemPrompt, userMessageFallback, "")
+
+      const contextFiles = ["PRD.md", ...(priorContext ? ["PRIOR_CONTEXT.md"] : [])].join("、")
+      const userMessage = `请先阅读 ${contextFiles}，然后生成 ${subtype} 设计产物，输出到 ${subtype}.${outputExt}。完成后必须追加 <!-- END:design-${subtype} --> 标记。`
+
+      // K6: 切 Pi 生成
+      const cfg = await loadAgentConfig("design")
+      let piOk = false
+
+      try {
+        const r = await runPiSession({
+          projectId: ctx.projectId,
+          workspaceDir,
+          prompt: userMessage,
+          provider: cfg.provider as "deepseek" | "anthropic" | "kimi" | "xiaomi" | "openai",
+          modelId: cfg.modelId,
+          timeoutMs: cfg.timeoutMs,
+          systemPromptOverride: systemPrompt,
+          onEvent: (e: PiSessionEvent) => {
+            switch (e.type) {
+              case "tool_start":
+                ctx.setPhase("tool_running", `执行 ${(e.data as { name?: string })?.name ?? "工具"}`)
+                break
+              case "tool_end":
+                ctx.setPhase("writing", "写入文件")
+                break
+              case "thinking_delta":
+                ctx.setPhase("thinking", "思考中")
+                break
+              case "text_delta": {
+                const d = e.data as { text?: string }
+                if (d?.text) ctx.send("text_delta", { text: d.text })
+                break
+              }
+            }
+          },
+        })
+        piOk = r.ok
+        if (r.ok) {
+          try {
+            content = await fs.readFile(join(workspaceDir, `${subtype}.${outputExt}`), "utf-8")
+          } catch { content = "" }
+        }
+      } catch { /* Pi 失败，回退到流式 */ }
+
+      // Pi 失败时回退到 gateway.stream()
+      if (!piOk || !content) {
+        ctx.send("log", { line: `Pi 不可用，回退到传统流式生成 ${subtype}` })
+        let userMessageFallback = prdContent
+        if (priorContext) {
+          userMessageFallback = `PRD 内容:\n\n${prdContent}\n\n---\n\n前置设计产物:\n\n${priorContext}\n\n请基于以上上下文生成 ${subtype} 设计。`
+        }
+        content = await streamOnceFallback(ctx, subtype, systemPrompt, userMessageFallback, "")
+      }
     }
 
     // 清洗元会话语句
     content = stripMetaTalk(content)
-
-    // UI 自检 + 自动补写一次（fallback 流式）
-    if (subtype === "ui") {
-      const { score, missing } = await selfCheckUi(content)
-      if (score < 70) {
-        ctx.send("log", { line: `UI 自检 ${score}/100，缺：${missing.join(", ")}，自动补写一次` })
-        log("agent", `design:generate ui selfCheck score=${score} missing=${missing.join(",")}`)
-        content = await streamOnceFallback(
-          ctx, subtype, systemPrompt,
-          `当前 UI 原型评分 ${score}/100，缺失项：${missing.join(", ")}。请在已有 HTML 基础上补完缺失项，输出完整 HTML，末尾保留 <!-- END:design-ui -->`,
-          content,
-        )
-        content = stripMetaTalk(content)
-      }
-    }
 
     // 写入文件
     ctx.setPhase("writing", `写入 ${subtype} 文件`)
@@ -406,8 +538,8 @@ export async function selfCheckUi(html: string): Promise<{ score: number; missin
     ["含语言切换", /i18n|locale|switch.*lang/i],
     ["含分页", /pagination|page-(prev|next)/i],
     ["含空状态", /empty[-\s]?state|暂无|没有数据/i],
-    ["页面分隔注释", /<!--\s*PAGE:/],
-    ["END_UI 标记", /<!--\s*END_UI\s*-->/],
+    ["含 6 个 PAGE 分隔注释", (h: string) => UI_PAGES.every(p => new RegExp(`<!--\\s*PAGE:${p}\\s*-->`).test(h))],
+    ["含 7 个 END 标记", (h: string) => [...UI_PAGES.map(p => `ui-${p}`), "ui-shell"].every(m => new RegExp(`<!--\\s*END:${m}\\s*-->`).test(h))],
     ["a11y aria-*", /aria-/],
   ]
   const missing: string[] = []
