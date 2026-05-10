@@ -8,13 +8,27 @@ import { runPiSession } from "@/lib/pi/session"
 import { buildDevSystemPrompt, buildDevUserPrompt } from "@/agents/prompts/dev"
 import { reopenFromGate } from "@/lib/hitl/gates"
 import { loadAgentConfig, buildSystemPrompt } from "@/agents/registry"
+import { WORKSPACE_WRITE_DENY } from "@/lib/pi/tools"
 import fs from "node:fs/promises"
 import { execSync } from "node:child_process"
+import path from "node:path"
+
+async function purgeContextMirrors(workspaceDir: string) {
+  const entries = await fs.readdir(workspaceDir).catch(() => [])
+  for (const f of entries) {
+    if (WORKSPACE_WRITE_DENY.some((re) => re.test(f))) {
+      await fs.rm(path.join(workspaceDir, f), { force: true }).catch(() => {})
+    }
+  }
+}
 
 export async function runDev(ctx: AgentRunCtx, instruction?: string): Promise<void> {
   const project = await prisma.project.findUniqueOrThrow({ where: { id: ctx.projectId } })
   const workspaceDir = paths.workspace(project.id)
   await fs.mkdir(workspaceDir, { recursive: true })
+
+  // J1.3: 启动前清理上下文镜像残留
+  await purgeContextMirrors(workspaceDir)
 
   // 预检: 检查是否配置了 API key
   const hasApiKey = !!process.env.DEEPSEEK_API_KEY

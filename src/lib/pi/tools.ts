@@ -5,6 +5,15 @@ import type { AgentToolResult, AgentToolUpdateCallback } from "@mariozechner/pi-
 import { Type, type Static } from "@mariozechner/pi-ai"
 import { log } from "@/lib/log"
 
+// ── workspace_write denylist ─────────────────────────────────────
+
+export const WORKSPACE_WRITE_DENY = [
+  /^prd\.md$/i, /^prd-?\d*\.md$/i,
+  /^prior[_-]?context\.md$/i, /^prior[_-]?context-?\d*\.md$/i,
+  /^context\.md$/i, /^design-(summary|detail|api|db|ui)(-\d+)?\.(md|html)$/i,
+  /\.context\.md$/i,
+]
+
 // ── Tool parameter schemas (typebox) ──────────────────────────────
 
 const ReadArtifactParams = Type.Object({
@@ -145,6 +154,10 @@ export function buildPiCustomTools(
     ): Promise<AgentToolResult<undefined>> => {
       try {
         const resolved = guardPath(params.path, workspaceDir)
+        const rel = path.relative(workspaceDir, resolved).replace(/\\/g, "/")
+        if (WORKSPACE_WRITE_DENY.some((re) => re.test(rel) || re.test(path.basename(rel)))) {
+          return toolErr(`workspace_write 拒绝：${rel} 属于上下文镜像文件，请用 read_artifact 重新拉取，禁止落盘。`)
+        }
         await fs.mkdir(path.dirname(resolved), { recursive: true })
         await fs.writeFile(resolved, params.content, "utf-8")
         log("pi", `workspace_write: ${params.path}`)
