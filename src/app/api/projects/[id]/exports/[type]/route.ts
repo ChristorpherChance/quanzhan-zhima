@@ -2,6 +2,7 @@ import { withErrorBoundary, AppError } from "@/lib/errors"
 import { exportSchema } from "@/lib/api-schemas"
 import { paths } from "@/config/paths"
 import { pandocConvert } from "@/lib/export/pandoc"
+import { mdToDocx, mdToPdf } from "@/lib/export/native"
 import { reviewToXlsx, parseDefects } from "@/lib/export/excel"
 import { packCodeZip } from "@/lib/export/git-zip"
 import { prisma } from "@/lib/db/prisma"
@@ -9,6 +10,19 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import crypto from "node:crypto"
 import { NextRequest } from "next/server"
+
+const USE_PANDOC = process.env.EXPORT_USE_PANDOC === "1"
+
+async function convertMarkdown(inputMd: string, outputPath: string, format: "docx" | "pdf"): Promise<string> {
+  if (USE_PANDOC) {
+    return pandocConvert({ inputMd, outputPath, format })
+  }
+  const mdContent = await fs.readFile(inputMd, "utf-8")
+  if (format === "docx") {
+    return mdToDocx(mdContent, outputPath)
+  }
+  return mdToPdf(mdContent, outputPath)
+}
 
 const VALID_TYPES = ["prd", "design", "code", "review"]
 
@@ -33,8 +47,8 @@ export const POST = withErrorBoundary(async (
         if (fmt === "md") {
           await fs.copyFile(prdPath, outPath)
         } else {
-          try { await pandocConvert({ inputMd: prdPath, outputPath: outPath, format: fmt as "docx" | "pdf" }) }
-          catch { files.push({ format: fmt, downloadUrl: "", error: "pandoc 未安装或失败" }); continue }
+          try { await convertMarkdown(prdPath, outPath, fmt as "docx" | "pdf") }
+          catch { files.push({ format: fmt, downloadUrl: "", error: "导出失败" }); continue }
         }
       } else if (params.type === "design" && ["md", "docx", "pdf"].includes(fmt)) {
         const designDir = paths.design(params.id)
@@ -47,8 +61,8 @@ export const POST = withErrorBoundary(async (
         if (fmt === "md") {
           await fs.copyFile(merged, outPath)
         } else {
-          try { await pandocConvert({ inputMd: merged, outputPath: outPath, format: fmt as "docx" | "pdf" }) }
-          catch { files.push({ format: fmt, downloadUrl: "", error: "pandoc 未安装或失败" }); continue }
+          try { await convertMarkdown(merged, outPath, fmt as "docx" | "pdf") }
+          catch { files.push({ format: fmt, downloadUrl: "", error: "导出失败" }); continue }
         }
       } else if (params.type === "code" && fmt === "zip") {
         await packCodeZip(paths.workspace(params.id), outPath)
@@ -67,8 +81,8 @@ export const POST = withErrorBoundary(async (
           if (fmt === "md") {
             await fs.copyFile(rptPath, outPath)
           } else {
-            try { await pandocConvert({ inputMd: rptPath, outputPath: outPath, format: fmt as "docx" | "pdf" }) }
-            catch { files.push({ format: fmt, downloadUrl: "", error: "pandoc 未安装或失败" }); continue }
+            try { await convertMarkdown(rptPath, outPath, fmt as "docx" | "pdf") }
+            catch { files.push({ format: fmt, downloadUrl: "", error: "导出失败" }); continue }
           }
         }
       } else {

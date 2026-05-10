@@ -8,6 +8,9 @@ import { J } from "@/lib/db/json"
 import type { AgentRunCtx } from "@/agents/types"
 import { DESIGN_SYSTEM } from "@/agents/prompts/design"
 
+const DESIGN_ORDER = ["summary", "api", "db", "detail", "ui"] as const
+const PRIOR_CONTEXT_LIMIT = 8000
+
 async function appendPlan(projectId: string, entry: string) {
   try {
     const filePath = paths.planPath(projectId)
@@ -68,6 +71,21 @@ async function hasEndMarker(content: string, subtype: string): Promise<boolean> 
   return END_MARKER_RE.test(content)
 }
 
+async function loadPriorContext(projectId: string, currentSubtype: string): Promise<string> {
+  const idx = DESIGN_ORDER.indexOf(currentSubtype as typeof DESIGN_ORDER[number])
+  if (idx <= 0) return ""
+  const parts: string[] = []
+  for (let i = 0; i < idx; i++) {
+    const path = getOutputPath(projectId, DESIGN_ORDER[i])
+    try {
+      const raw = await fs.readFile(path, "utf-8")
+      const truncated = raw.slice(0, PRIOR_CONTEXT_LIMIT)
+      parts.push(`=== 前置产物: ${DESIGN_ORDER[i]} ===\n${truncated}${raw.length > PRIOR_CONTEXT_LIMIT ? "\n...(截断)" : ""}`)
+    } catch { /* 前置产物不存在则跳过 */ }
+  }
+  return parts.join("\n\n")
+}
+
 export async function generate(
   ctx: AgentRunCtx,
   subtype: string,
@@ -91,12 +109,19 @@ export async function generate(
       throw new Error("PRD 不存在，请先生成 PRD")
     }
 
+    const priorContext = await loadPriorContext(ctx.projectId, subtype)
     const systemPrompt = DESIGN_SYSTEM(subtype)
     let content = ""
-    const MAX_CONTINUATIONS = 3
+    const MAX_CONTINUATIONS = 2
+
+    // 构建首轮 user message，包含 PRD + 前置产物
+    let userMessage = prdContent
+    if (priorContext) {
+      userMessage = `PRD 内容:\n\n${prdContent}\n\n---\n\n前置设计产物:\n\n${priorContext}\n\n请基于以上上下文生成 ${subtype} 设计。`
+    }
 
     // 第一轮生成
-    content = await streamOnce(ctx, subtype, systemPrompt, prdContent, content)
+    content = await streamOnce(ctx, subtype, systemPrompt, userMessage, content)
 
     // 自动续写：检查 END 标记，最多续写 3 次
     for (let i = 0; i < MAX_CONTINUATIONS; i++) {

@@ -76,18 +76,40 @@ export async function runDev(ctx: AgentRunCtx, instruction?: string): Promise<vo
     where: { projectId: ctx.projectId, type: "code" },
     orderBy: { version: "desc" },
   })
+  // 统计文件数
+  let filesCount = 0
+  try { filesCount = (await fs.readdir(workspaceDir)).length } catch { /* ignore */ }
   if (existing && !existing.locked) {
     await prisma.artifact.update({
       where: { id: existing.id },
-      data: { storagePath: workspaceDir, version: existing.version + 1 },
+      data: {
+        storagePath: workspaceDir,
+        version: existing.version + 1,
+        meta: J.stringify({ entry: "index.html", filesCount }),
+      },
     })
   } else {
     await prisma.artifact.create({
-      data: { projectId: ctx.projectId, type: "code", version: (existing?.version ?? 0) + 1, storagePath: workspaceDir },
+      data: {
+        projectId: ctx.projectId,
+        type: "code",
+        version: (existing?.version ?? 0) + 1,
+        storagePath: workspaceDir,
+        meta: J.stringify({ entry: "index.html", filesCount }),
+      },
     })
   }
 
-  ctx.send("result", { workspaceDir })
+  ctx.send("result", { workspaceDir, filesCount })
+
+  // 自动停止旧沙箱，提示用户重新预览
+  try {
+    const { stopSandbox } = await import("@/lib/sandbox")
+    await stopSandbox(ctx.projectId).catch(() => {})
+    ctx.send("log", { line: "已停止旧沙箱，请点击预览自动重启查看新代码" })
+  } catch {
+    ctx.send("log", { line: "代码已生成，点击预览查看" })
+  }
 }
 
 const MINIMAL_SERVER_JS = `const http = require("http")

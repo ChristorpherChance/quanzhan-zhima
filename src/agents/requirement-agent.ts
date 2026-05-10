@@ -59,6 +59,24 @@ async function upsertArtifact(
   }
 }
 
+async function loadUploadedDocs(projectId: string): Promise<string> {
+  const uploads = await prisma.artifact.findMany({
+    where: { projectId, type: "requirement-upload" },
+    orderBy: { version: "asc" },
+  })
+  if (uploads.length === 0) return ""
+
+  const contents: string[] = []
+  for (const u of uploads) {
+    try {
+      const raw = await fs.readFile(u.storagePath, "utf-8")
+      const meta = u.meta ? JSON.parse(u.meta as string) : {}
+      contents.push(`=== 上传文档: ${meta.originalName ?? "未知"} ===\n${raw.slice(0, 8000)}`)
+    } catch { /* skip missing files */ }
+  }
+  return contents.join("\n\n")
+}
+
 export async function clarify(
   ctx: AgentRunCtx,
   oneLiner: string,
@@ -68,7 +86,12 @@ export async function clarify(
   ctx.setPhase("thinking", "分析需求")
   ctx.send("progress", { phase: "clarify", message: "正在分析需求，生成探索性问题..." })
 
-  const userMessage = REQUIREMENT_CLARIFY_USER(oneLiner, extra)
+  // 加载上传文档
+  const uploadedDocs = await loadUploadedDocs(ctx.projectId)
+  let userMessage = REQUIREMENT_CLARIFY_USER(oneLiner, extra)
+  if (uploadedDocs) {
+    userMessage = `以下为用户上传的需求文档:\n\n${uploadedDocs}\n\n---\n\n${userMessage}`
+  }
 
   try {
     const res = await chat({
@@ -114,7 +137,12 @@ export async function draft(
   ctx.setPhase("thinking", "生成 PRD 文档")
   ctx.send("progress", { phase: "draft", message: "正在生成 PRD 文档..." })
 
-  const userMessage = REQUIREMENT_DRAFT_USER(oneLiner, answers)
+  // 加载上传文档
+  const uploadedDocs = await loadUploadedDocs(ctx.projectId)
+  let userMessage = REQUIREMENT_DRAFT_USER(oneLiner, answers)
+  if (uploadedDocs) {
+    userMessage = `以下为用户上传的需求文档:\n\n${uploadedDocs}\n\n---\n\n${userMessage}`
+  }
 
   try {
     const streamGen = stream({

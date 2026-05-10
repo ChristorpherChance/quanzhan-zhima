@@ -1,6 +1,8 @@
 import { prisma } from "@/lib/db/prisma"
 import { AppError } from "@/lib/errors"
 import { J } from "@/lib/db/json"
+import { paths } from "@/config/paths"
+import { existsSync } from "node:fs"
 
 export type GateType = "G0" | "G1" | "G2" | "G3" | "G4" | "G5" | "G6"
 
@@ -32,7 +34,7 @@ async function checkConditions(
       orderBy: { version: "desc" },
     })
     if (!prd) reasons.push("未生成 PRD")
-    else if (!prd.locked) reasons.push("PRD 未锁定")
+    else if (!prd.locked) reasons.push("PRD 未完成")
   } else if (gate === "G2") {
     // G2 设计→开发：全部 5 个设计子产物已生成并锁定
     for (const t of ["design-summary", "design-api", "design-db", "design-detail", "design-ui"]) {
@@ -41,20 +43,21 @@ async function checkConditions(
         orderBy: { version: "desc" },
       })
       if (!a) reasons.push(`缺少子产物：${t}`)
-      else if (!a.locked) reasons.push(`未锁定：${t}`)
+      else if (!a.locked) reasons.push(`未完成：${t}`)
     }
   } else if (gate === "G3") {
-    // G3 开发→审查：workspace 下有 package.json + 至少 1 个 js/ts/html 文件 + 沙箱曾启动成功
+    // G3 开发→审查：code 产物存在 + workspace 有入口文件
     const code = await prisma.artifact.findFirst({
       where: { projectId, type: "code" },
       orderBy: { version: "desc" },
     })
     if (!code) reasons.push("未生成代码产物")
-    // 检查最近的 job 是否有 sandbox 启动成功
-    const sandboxJob = await prisma.job.findFirst({
-      where: { projectId, type: "sandbox-run", status: "succeeded" },
-    })
-    if (!sandboxJob) reasons.push("沙箱未成功启动过")
+    else if (!code.locked) reasons.push("代码未确认")
+    const ws = paths.workspace(projectId)
+    const hasEntry = existsSync(`${ws}/index.html`) ||
+                     existsSync(`${ws}/server.js`) ||
+                     existsSync(`${ws}/package.json`)
+    if (!hasEntry) reasons.push("工作区缺少入口文件")
   } else if (gate === "G4") {
     // G4 审查→导出：审查报告已生成且无 P0 缺陷
     const report = await prisma.artifact.findFirst({
@@ -71,13 +74,13 @@ async function checkConditions(
     })
     if (!exp) reasons.push("未完成导出")
   } else if (gate === "G6") {
-    // G6 交付：全部关卡锁定
+    // G6 交付：全部阶段锁定
     const allGates = await prisma.gate.findMany({
       where: { projectId },
     })
     const lockedSet = new Set(allGates.filter(g => g.status === "locked").map(g => g.type))
     for (const g of ["G0","G1","G2","G3","G4","G5"]) {
-      if (!lockedSet.has(g)) reasons.push(`${g} 未锁定`)
+      if (!lockedSet.has(g)) reasons.push(`${g} 未完成`)
     }
   }
 
@@ -86,7 +89,7 @@ async function checkConditions(
 
 export async function lockGate(projectId: string, gate: GateType) {
   const { ok, reasons } = await checkConditions(projectId, gate)
-  if (!ok) throw new AppError("E_GATE_CLOSED", "关卡条件未满足", { reasons })
+  if (!ok) throw new AppError("E_GATE_CLOSED", "阶段条件未满足", { reasons })
 
   const row = await prisma.gate.upsert({
     where: { projectId_type: { projectId, type: gate } },

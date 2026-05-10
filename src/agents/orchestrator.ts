@@ -224,6 +224,6 @@ async function appendChangelog(projectId: string, entry: string) {
 }
 
 export async function appendGateLog(projectId: string, gateType: string) {
-  const label = gateType === "G1" ? "需求阶段锁定" : gateType === "G2" ? "设计阶段锁定" : `${gateType} 锁定`
+  const label = gateType === "G1" ? "完成需求阶段" : gateType === "G2" ? "完成设计阶段" : `完成 ${gateType} 阶段`
   await appendChangelog(projectId, `${label}`)
 }

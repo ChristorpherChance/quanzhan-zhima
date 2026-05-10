@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useReducer, useCallback, useEffect, forwardRef, useImperativeHandle, Fragment } from "react"
+import { useState, useReducer, useCallback, useEffect, useRef, forwardRef, useImperativeHandle, Fragment } from "react"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -14,7 +14,7 @@ import { StreamingActions } from "@/components/workbench/streaming-actions"
 import { PhaseTracker, type PhaseTrackerData, type TrackerPhase } from "@/components/workbench/PhaseTracker"
 import { useSSE } from "@/lib/use-sse"
 import { cn } from "@/lib/utils"
-import { Check, X, Bot, User as UserIcon, GitBranch, GitFork, ListTree, ChevronDown, StopCircle } from "lucide-react"
+import { Check, X, Bot, User as UserIcon, GitBranch, GitFork, ListTree, ChevronDown, StopCircle, ArrowDown } from "lucide-react"
 import type { SessionTreeNode } from "@/lib/pi/session-manager"
 
 type BlockKind = "thinking" | "text" | "tool-call" | "error"
@@ -230,6 +230,7 @@ interface AgentChatProps {
   onSend: (text: string) => Promise<void>
   onAction?: (action: string) => void
   onDone?: () => void
+  onProgress?: (data: { step?: number; total?: number; subtype?: string; done?: boolean; failed?: boolean; message?: string; elapsedMs?: number }) => void
   onConfirmDraft?: (draft: DraftInfo) => Promise<void>
   onDiscardDraft?: (draft: DraftInfo) => void
   actions?: Array<{ label: string; key: string }>
@@ -244,6 +245,7 @@ export const AgentChat = forwardRef<AgentChatHandle, AgentChatProps>(function Ag
   onSend,
   onAction,
   onDone,
+  onProgress,
   onConfirmDraft,
   onDiscardDraft,
   actions,
@@ -261,6 +263,51 @@ export const AgentChat = forwardRef<AgentChatHandle, AgentChatProps>(function Ag
   })
   const [input, setInput] = useState("")
   const onDoneRef = useCallback(() => onDone?.(), [onDone])
+
+  // 滚动跟随
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const [isAtBottom, setIsAtBottom] = useState(true)
+  const forceScrollRef = useRef(false)
+  const rafRef = useRef(0)
+
+  const handleScroll = useCallback(() => {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current)
+    rafRef.current = requestAnimationFrame(() => {
+      const el = scrollRef.current
+      if (!el) return
+      const dist = el.scrollHeight - el.scrollTop - el.clientHeight
+      setIsAtBottom(dist < 80)
+    })
+  }, [])
+
+  const scrollToBottom = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+    setIsAtBottom(true)
+  }, [])
+
+  // 计算最后一条 assistant 消息的文本长度，用于触发 scroll effect
+  const lastAssistantMsg = [...state.messages].reverse().find((m) => m.role === "assistant")
+  const lastTextLength = lastAssistantMsg?.blocks
+    .filter((b) => b.kind === "text" || b.kind === "thinking")
+    .reduce((sum, b) => sum + b.content.length, 0) ?? 0
+
+  // 自动滚动跟随：新内容时若在底部则滚动
+  useEffect(() => {
+    if (!scrollRef.current) return
+    if (forceScrollRef.current || isAtBottom) {
+      scrollToBottom()
+    }
+  }, [state.messages.length, lastTextLength, scrollToBottom, isAtBottom])
+
+  // force scroll 在 result/end 事件后重置
+  useEffect(() => {
+    if (forceScrollRef.current) {
+      scrollToBottom()
+      forceScrollRef.current = false
+    }
+  }, [state.jobEnded, scrollToBottom])
 
   // 暴露方法给父组件
   useImperativeHandle(ref, () => ({
@@ -371,7 +418,8 @@ export const AgentChat = forwardRef<AgentChatHandle, AgentChatProps>(function Ag
 
   useSSE(streamingUrl, useCallback((event: string, raw: unknown) => {
     if (event === "progress") {
-      const d = raw as { phase?: string; message?: string }
+      const d = raw as { phase?: string; message?: string; step?: number; total?: number; subtype?: string; done?: boolean; failed?: boolean; elapsedMs?: number }
+      onProgress?.(d)
       dispatch({
         type: "addAssistantBlock",
         kind: "thinking",
@@ -403,6 +451,7 @@ export const AgentChat = forwardRef<AgentChatHandle, AgentChatProps>(function Ag
       dispatch({ type: "finalizeAssistant" })
       dispatch({ type: "setStreaming", streaming: false })
       dispatch({ type: "setJobEnded", ended: true })
+      forceScrollRef.current = true
       onDoneRef()
     } else if (event === "error") {
       const msg = (raw as { message?: string })?.message ?? "未知错误"
@@ -413,6 +462,7 @@ export const AgentChat = forwardRef<AgentChatHandle, AgentChatProps>(function Ag
     } else if (event === "end") {
       dispatch({ type: "finalizeAssistant" })
       dispatch({ type: "setStreaming", streaming: false })
+      forceScrollRef.current = true
       onDoneRef()
     } else if (event === "tool_start") {
       const d = raw as { toolCallId?: string; name?: string; args?: unknown }
@@ -558,7 +608,7 @@ export const AgentChat = forwardRef<AgentChatHandle, AgentChatProps>(function Ag
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full relative">
       <div className="flex flex-col border-b">
         {/* 标题栏 */}
         <div className="flex items-center justify-between p-3 pb-2">
@@ -646,7 +696,7 @@ export const AgentChat = forwardRef<AgentChatHandle, AgentChatProps>(function Ag
         className="shrink-0"
       />
 
-      <ScrollArea className="flex-1 p-3">
+      <ScrollArea ref={scrollRef} className="flex-1 p-3" onScroll={handleScroll}>
         <div className="space-y-3">
           {state.messages.length === 0 && (
             <p className="text-xs text-muted-foreground text-center py-8">
@@ -710,6 +760,21 @@ export const AgentChat = forwardRef<AgentChatHandle, AgentChatProps>(function Ag
           )}
         </div>
       </ScrollArea>
+
+      {/* 浮动回到底部按钮 */}
+      {!isAtBottom && (
+        <div className="absolute bottom-36 left-1/2 -translate-x-1/2 z-10">
+          <Button
+            variant="secondary"
+            size="sm"
+            className="rounded-full shadow-md text-xs gap-1"
+            onClick={scrollToBottom}
+          >
+            <ArrowDown className="w-3 h-3" />
+            回到底部
+          </Button>
+        </div>
+      )}
 
       {actions && actions.length > 0 && (
         <div className="px-3 py-2 border-t flex flex-wrap gap-1">

@@ -10,6 +10,7 @@ import { AgentChat, type AgentChatHandle } from "@/components/workbench/agent-ch
 import { ThreePane } from "@/components/workbench/three-pane"
 import { StageNav } from "@/components/workbench/stage-nav"
 import { StepProgress, type StepStatus } from "@/components/workbench/step-progress"
+import { DesignProgressPanel, createInitialSteps, type DesignStepProgress } from "@/components/workbench/DesignProgressPanel"
 import { FileUpload } from "@/components/workbench/file-upload"
 import { Wand2, SkipForward, Lock, Check } from "lucide-react"
 
@@ -49,6 +50,8 @@ export default function DesignPage() {
   const [project, setProject] = useState<{ currentStage: string; name: string } | null>(null)
   const [gates, setGates] = useState<Array<{ type: string; status: string }>>([])
   const [draftReady, setDraftReady] = useState(false)
+  const [designAllSteps, setDesignAllSteps] = useState<DesignStepProgress[]>(createInitialSteps())
+  const [designAllTotalMs, setDesignAllTotalMs] = useState<number | undefined>()
   const chatRef = useRef<AgentChatHandle>(null)
   const autoChainRef = useRef(false)
   const autoChainStepRef = useRef(0)
@@ -136,35 +139,40 @@ export default function DesignPage() {
     setJobId(null)
 
     if (autoChainRef.current) {
-      // 一键生成模式：自动锁稿并串行推进下一步
-      const stepIdx = autoChainStepRef.current
-      const s = DESIGN_STEPS[stepIdx]
+      // 一键生成模式 (generate-all)：后端已完成全部5步，重新加载所有产物并标记完成
+      autoChainRef.current = false
       ;(async () => {
-        try {
-          const r = await fetch(`/api/projects/${pid}/artifacts/${s.artifactType}`)
-          const { data } = await r.json()
-          if (data?.content) {
-            setContents((prev) => ({ ...prev, [s.key]: data.content }))
-            setArtifactVersions((prev) => ({ ...prev, [s.key]: data.version ?? 1 }))
-            // 自动锁稿
-            await fetch(`/api/projects/${pid}/artifacts/${s.artifactType}/confirm`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ content: data.content }),
-            })
-            setStepStates((prev) => {
-              const next = [...prev]
-              next[stepIdx] = "locked"
-              return next
-            })
-            toast({ title: `${s.label}已自动定稿` })
+        const results: Array<{ key: string; ok: boolean }> = []
+        for (const s of DESIGN_STEPS) {
+          try {
+            const r = await fetch(`/api/projects/${pid}/artifacts/${s.artifactType}`)
+            const { data } = await r.json()
+            if (data?.content) {
+              setContents((prev) => ({ ...prev, [s.key]: data.content }))
+              setArtifactVersions((prev) => ({ ...prev, [s.key]: data.version ?? 1 }))
+              // 自动锁稿
+              await fetch(`/api/projects/${pid}/artifacts/${s.artifactType}/confirm`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ content: data.content }),
+              }).catch(() => {})
+              results.push({ key: s.key, ok: true })
+            } else {
+              results.push({ key: s.key, ok: false })
+            }
+          } catch {
+            results.push({ key: s.key, ok: false })
           }
-          // 串行推进下一步
-          await autoGenerateNext(stepIdx)
-        } catch (e: unknown) {
-          toast({ title: "自动定稿失败", description: String((e as Error)?.message ?? e), variant: "destructive" })
-          autoChainRef.current = false
         }
+        setStepStates((prev) => {
+          const next = [...prev]
+          for (let i = 0; i < DESIGN_STEPS.length; i++) {
+            next[i] = results[i]?.ok ? "locked" : "draft"
+          }
+          return next
+        })
+        const okCount = results.filter((r) => r.ok).length
+        toast({ title: `一键生成完成: ${okCount}/${DESIGN_STEPS.length} 成功` })
       })()
     } else {
       // 手动对话模式：等待用户确认
@@ -175,7 +183,7 @@ export default function DesignPage() {
         return next
       })
     }
-  }, [currentStep, pid, autoGenerateNext])
+  }, [currentStep, pid])
 
   const handleConfirmDraft = useCallback(() => {
     const stepKey = DESIGN_STEPS[currentStep].key
@@ -323,7 +331,7 @@ export default function DesignPage() {
 
   const handleLockG2 = async () => {
     try {
-      const r = await fetch(`/api/projects/${pid}/gates/G2/lock`, { method: "POST" })
+      const r = await fetch(`/api/projects/${pid}/stages/G2/complete`, { method: "POST" })
       if (!r.ok) {
         const { error } = await r.json()
         toast({ title: "G2 锁定失败", description: error?.message ?? "", variant: "destructive" })
@@ -345,11 +353,33 @@ export default function DesignPage() {
   const currentState = stepStates[currentStep]
   const allDone = stepStates.every((s) => s === "locked" || s === "skipped")
 
+  const handleProgress = useCallback((data: {
+    step?: number; total?: number; subtype?: string; done?: boolean; failed?: boolean; message?: string; elapsedMs?: number
+  }) => {
+    if (data.subtype && data.step != null) {
+      setDesignAllSteps((prev) => {
+        const next = [...prev]
+        if (next[data.step!]) {
+          next[data.step!] = {
+            ...next[data.step!],
+            status: data.done ? "done" : data.failed ? "failed" : "running",
+            elapsedMs: data.elapsedMs,
+            error: data.failed ? data.message : undefined,
+          }
+        }
+        return next
+      })
+    }
+  }, [])
+
   const handleOneClick = () => {
     autoChainRef.current = true
     autoChainStepRef.current = 0
     setCurrentStep(0)
     setDraftReady(false)
+    // 重置进度面板
+    setDesignAllSteps(createInitialSteps().map((s, i) => ({ ...s, status: i === 0 ? "running" : "pending" })))
+    setDesignAllTotalMs(undefined)
     setStepStates((prev) => {
       const next = [...prev]
       for (let i = 0; i < next.length; i++) {
@@ -358,12 +388,11 @@ export default function DesignPage() {
       next[0] = "generating"
       return next
     })
-    const s = DESIGN_STEPS[0]
-    chatRef.current?.addUserMessage(`一键生成全部：基于 PRD 文档，依次生成概要设计、接口设计、数据库设计、详细设计和 UI 原型。开始生成${s.label}：${PRESET_INSTRUCTIONS[s.key]}`)
-    fetch(`/api/projects/${pid}/design/generate`, {
+    chatRef.current?.addUserMessage("一键生成全部：基于 PRD 文档，依次生成概要设计、接口设计、数据库设计、详细设计和 UI 原型")
+    fetch(`/api/projects/${pid}/design/generate-all`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ subtype: s.key }),
+      body: JSON.stringify({}),
     })
       .then((r) => r.json())
       .then(({ data }) => setJobId(data.jobId))
@@ -393,7 +422,7 @@ export default function DesignPage() {
               <FileUpload projectId={pid} onParsed={handleFileParsed} />
               <Button size="sm" onClick={handleLockG2} disabled={!allDone}>
                 <Lock className="w-3.5 h-3.5 mr-1" />
-                锁定设计 (G2)
+                完成设计阶段
               </Button>
             </div>
           </div>
@@ -406,9 +435,16 @@ export default function DesignPage() {
           />
 
           <div className="flex-1 overflow-auto">
+            {/* 一键生成进度面板 */}
+            {autoChainRef.current && (
+              <DesignProgressPanel
+                steps={designAllSteps}
+                totalMs={designAllTotalMs}
+              />
+            )}
             <ArtifactViewer
               content={contents[currentStepDef.key] ?? null}
-              loading={currentState === "generating"}
+              loading={currentState === "generating" && !autoChainRef.current}
               title={currentStepDef.label}
               projectId={pid}
               artifactType={currentStepDef.artifactType}
@@ -483,6 +519,7 @@ export default function DesignPage() {
           streamingUrl={streamingUrl}
           onSend={handleChatSend}
           onDone={handleJobDone}
+          onProgress={handleProgress}
           placeholder={`输入设计指令（当前: ${currentStepDef.label}）...`}
         />
       }

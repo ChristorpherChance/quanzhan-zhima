@@ -117,7 +117,7 @@ export default function DevPage() {
 
   const handleLockG3 = async () => {
     try {
-      const r = await fetch(`/api/projects/${pid}/gates/G3/lock`, { method: "POST" })
+      const r = await fetch(`/api/projects/${pid}/stages/G3/complete`, { method: "POST" })
       if (!r.ok) {
         const { error } = await r.json()
         toast({ title: "G3 锁定失败", description: error?.message ?? "", variant: "destructive" })
@@ -169,7 +169,7 @@ export default function DevPage() {
                 导出 zip
               </Button>
               <Button variant="outline" size="sm" onClick={handleLockG3}>
-                锁定
+                完成开发阶段
               </Button>
             </div>
           </div>

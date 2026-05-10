@@ -62,18 +62,27 @@ export async function runReview(ctx: AgentRunCtx, scope: string[]): Promise<void
 
   if (scope.includes("lint")) {
     ctx.send("log", { line: "跑 eslint..." })
-    if (toolAvailable(ws, "eslint")) {
+    const eslintConfigs = ["eslint.config.js", "eslint.config.mjs", "eslint.config.cjs", ".eslintrc.js", ".eslintrc.json"]
+    let hasEslintConfig = false
+    for (const cfg of eslintConfigs) {
+      try { await fs.access(path.join(ws, cfg)); hasEslintConfig = true; break } catch { /* continue */ }
+    }
+    if (toolAvailable(ws, "eslint") && hasEslintConfig) {
       const r = await execIn(ws, "npx --no-install eslint . --max-warnings=0 2>&1")
       out.lint = r.exitCode === 0 ? "passed" : { exitCode: r.exitCode, stdout: r.stdout?.slice(0, 2000), stderr: r.stderr?.slice(0, 1000) }
     } else {
-      out.lint = { skipped: true, reason: "eslint not installed in workspace" }
+      out.lint = { skipped: true, reason: hasEslintConfig ? "eslint not installed" : "no eslint config in workspace" }
     }
   }
   if (scope.includes("types")) {
     ctx.send("log", { line: "跑 tsc --noEmit..." })
     if (toolAvailable(ws, "tsc")) {
       const r = await execIn(ws, "npx --no-install tsc --noEmit 2>&1")
-      out.types = r.exitCode === 0 ? "passed" : { exitCode: r.exitCode, stdout: r.stdout?.slice(0, 2000), stderr: r.stderr?.slice(0, 1000) }
+      if (r.exitCode === 127) {
+        out.types = { skipped: true, reason: "tsc command not found (exit 127)" }
+      } else {
+        out.types = r.exitCode === 0 ? "passed" : { exitCode: r.exitCode, stdout: r.stdout?.slice(0, 2000), stderr: r.stderr?.slice(0, 1000) }
+      }
     } else {
       out.types = { skipped: true, reason: "typescript not installed in workspace" }
     }
@@ -196,6 +205,29 @@ export async function fixReview(ctx: AgentRunCtx, severityFilter: ("P0" | "P1")[
   }
 
   const fixed = (tscR.exitCode ?? 1) === 0 && (eslintR.exitCode ?? eslintR.skipped ? 0 : 1) === 0
+
+  // 更新 review-report artifact 的修复状态
+  const existingArtifact = await prisma.artifact.findFirst({
+    where: { projectId: ctx.projectId, type: "review-report" },
+    orderBy: { version: "desc" },
+  })
+  if (existingArtifact) {
+    const prevMeta = existingArtifact.meta ? JSON.parse(existingArtifact.meta as string) : {}
+    await prisma.artifact.update({
+      where: { id: existingArtifact.id },
+      data: {
+        meta: J.stringify({
+          ...prevMeta,
+          lastFixResult: {
+            repaired: fixed,
+            tscPassed: (tscR.exitCode ?? 1) === 0,
+            eslintPassed: (eslintR.exitCode ?? 1) === 0 || eslintR.skipped,
+            fixedAt: new Date().toISOString(),
+          },
+        }),
+      },
+    })
+  }
 
   ctx.send("result", {
     repaired: fixed,

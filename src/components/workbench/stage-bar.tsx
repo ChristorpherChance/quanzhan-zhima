@@ -39,12 +39,12 @@ export function StageBar({ projectId, currentStage, gates, className }: StageBar
   const handleLock = useCallback(async (gate: string) => {
     setLoading(gate)
     try {
-      const r = await fetch(`/api/projects/${projectId}/gates/${gate}/lock`, { method: "POST" })
+      const r = await fetch(`/api/projects/${projectId}/stages/${gate}/complete`, { method: "POST" })
       if (!r.ok) {
         const { error } = await r.json()
         const reasons = error?.reasons as string[] | undefined
         toast({
-          title: `${GATE_LABELS[gate]} 锁定失败`,
+          title: `${GATE_LABELS[gate]} 阶段锁定失败`,
           description: reasons?.join("; ") ?? "条件未满足",
           variant: "destructive",
         })
@@ -53,7 +53,7 @@ export function StageBar({ projectId, currentStage, gates, className }: StageBar
         window.location.reload()
       }
     } catch (e: unknown) {
-      toast({ title: "锁定失败", description: String((e as Error)?.message ?? e), variant: "destructive" })
+      toast({ title: "阶段锁定失败", description: String((e as Error)?.message ?? e), variant: "destructive" })
     } finally {
       setLoading(null)
     }
@@ -94,7 +94,7 @@ export function StageBar({ projectId, currentStage, gates, className }: StageBar
     }
   }, [projectId])
 
-  // 找到当前应锁定的关卡
+  // 找到当前应锁定的阶段
   const stageToGate: Record<string, string> = {
     requirement: "G0",
     design: "G1",
@@ -140,7 +140,7 @@ export function StageBar({ projectId, currentStage, gates, className }: StageBar
           const isLocked = info.status === "locked"
           const gIdx = GATE_SEQUENCE.indexOf(gate)
 
-          // 只有当前/上一个未锁的关卡才显示可操作
+          // 只有当前/上一个未锁的阶段才显示可操作
           if (gIdx > currentGateIdx + 1) return null
 
           if (isLocked) {
@@ -154,7 +154,7 @@ export function StageBar({ projectId, currentStage, gates, className }: StageBar
                 className="text-xs"
               >
                 <LockOpen className="w-3 h-3 mr-1" />
-                重开 {GATE_LABELS[gate]}
+                重新打开{GATE_LABELS[gate]}阶段
               </Button>
             )
           }
@@ -169,7 +169,7 @@ export function StageBar({ projectId, currentStage, gates, className }: StageBar
                 className="text-xs"
               >
                 <Lock className="w-3 h-3 mr-1" />
-                {loading === gate ? "..." : `锁定 ${GATE_LABELS[gate]}`}
+                {loading === gate ? "..." : `完成${GATE_LABELS[gate]}阶段`}
               </Button>
             )
           }

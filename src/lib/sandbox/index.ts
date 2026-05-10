@@ -10,3 +10,8 @@ export async function startSandbox(opts: SandboxStartOpts): Promise<SandboxHandl
 
 export { getRunning } from "./child-process"
 export type { SandboxHandle, SandboxStartOpts }
+
+export async function stopSandbox(projectId: string) {
+  const h = getRunning(projectId)
+  if (h) await h.stop()
+}

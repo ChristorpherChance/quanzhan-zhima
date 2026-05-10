@@ -8,6 +8,7 @@ import { ArtifactViewer } from "@/components/workbench/artifact-viewer"
 import { AgentChat, type AgentChatHandle } from "@/components/workbench/agent-chat"
 import { ThreePane } from "@/components/workbench/three-pane"
 import { StageNav } from "@/components/workbench/stage-nav"
+import { RequirementUploader } from "@/components/workbench/RequirementUploader"
 import { Wand2 } from "lucide-react"
 
 export default function RequirementPage() {
@@ -103,7 +104,7 @@ export default function RequirementPage() {
 
   const handleLock = async () => {
     try {
-      const r = await fetch(`/api/projects/${pid}/gates/G1/lock`, { method: "POST" })
+      const r = await fetch(`/api/projects/${pid}/stages/G1/complete`, { method: "POST" })
       if (!r.ok) {
         const { error } = await r.json()
         toast({ title: "锁定失败", description: error?.message ?? "", variant: "destructive" })
@@ -148,11 +149,15 @@ export default function RequirementPage() {
                 需求澄清
               </Button>
               <Button size="sm" onClick={handleLock} disabled={!prd}>
-                锁定 PRD
+                完成需求阶段
               </Button>
             </div>
           </div>
           <div className="flex-1 overflow-auto">
+            {/* 文档上传区域 */}
+            <div className="px-4 pt-3">
+              <RequirementUploader projectId={pid} />
+            </div>
             {/* 草稿确认栏 */}
             {draftReady && (
               <div className="flex items-center justify-center gap-3 px-6 pt-3 pb-1">

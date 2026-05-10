@@ -115,6 +115,6 @@ export async function computeGate(
       return { confidence: lockedTypes.length / required.length, reasons }
     }
     default:
-      return { confidence: 0, reasons: [`未知关卡: ${gate}`] }
+      return { confidence: 0, reasons: [`未知阶段: ${gate}`] }
   }
 }
