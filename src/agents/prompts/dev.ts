@@ -41,8 +41,45 @@ export function buildDevUserPrompt(extra?: string): string {
  */
 export async function buildLLMDevPrompt(projectId: string): Promise<string> {
   const basePrompt = await buildDevSystemPrompt(projectId)
-  const { loadAgentConfig } = await import("@/agents/registry")
   const { RED_LINES_BLOCK } = await import("./_red-lines")
-  const systemPrompt = RED_LINES_BLOCK + "\n\n" + basePrompt
+
+  // LLM 直连模式无法调用 read_artifact 工具,必须直接注入 PRD + 设计产物文本(fix)
+  const fs = await import("node:fs/promises")
+  const path = await import("node:path")
+  const { paths } = await import("@/config/paths")
+
+  const tryRead = async (p: string, limit = 8000): Promise<string> => {
+    try {
+      const raw = await fs.readFile(p, "utf-8")
+      return raw.length > limit ? raw.slice(0, limit) + "\n...(截断)" : raw
+    } catch { return "" }
+  }
+
+  const prdContent = await tryRead(paths.prd(projectId))
+  const designDir = paths.design(projectId)
+  const summary = await tryRead(path.join(designDir, "summary.md"))
+  const detail = await tryRead(path.join(designDir, "detail.md"), 12000)
+  const api = await tryRead(path.join(designDir, "api.md"), 8000)
+  const db = await tryRead(path.join(designDir, "db.md"), 6000)
+
+  const contextBlock = [
+    prdContent && `## PRD（产品需求文档）\n${prdContent}`,
+    summary && `## 概要设计\n${summary}`,
+    detail && `## 详细设计\n${detail}`,
+    api && `## API 设计\n${api}`,
+    db && `## 数据库设计\n${db}`,
+  ].filter(Boolean).join("\n\n---\n\n")
+
+  const systemPrompt = `${RED_LINES_BLOCK}
+
+${basePrompt}
+
+# ⚠️ 强制约束 — 必须严格遵循 PRD,禁止凭空发挥
+你将基于下方真实的 PRD + 4 份设计产物生成代码。**严禁生成与 PRD 无关的功能**(如任务管理器、待办清单等通用 demo)。所有功能模块、字段名、术语必须来自 PRD。
+
+# 项目上下文(必读)
+
+${contextBlock || "(注:PRD 和设计产物为空,请直接根据用户需求生成)"}
+`
   return systemPrompt
 }
