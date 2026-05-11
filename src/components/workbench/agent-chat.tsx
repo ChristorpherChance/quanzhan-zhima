@@ -5,13 +5,14 @@ import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Badge } from "@/components/ui/badge"
+import { toast } from "@/components/ui/toast"
 import { MarkdownView } from "@/components/markdown"
 import { StreamingText } from "@/components/workbench/streaming-text"
 import { ThinkingCard } from "@/components/workbench/thinking-card"
 import { ToolCallCard } from "@/components/workbench/tool-call-card"
 import { EnhancedInput } from "@/components/workbench/enhanced-input"
 import { StreamingActions } from "@/components/workbench/streaming-actions"
-import { PhaseTracker, type PhaseTrackerData, type TrackerPhase } from "@/components/workbench/PhaseTracker"
+import { PhaseTracker, type PhaseTrackerData, type TrackerPhase, type ProgressInfo } from "@/components/workbench/PhaseTracker"
 import { useSSE } from "@/lib/use-sse"
 import { cn } from "@/lib/utils"
 import { Check, X, Bot, User as UserIcon, GitBranch, GitFork, ListTree, ChevronDown, StopCircle, ArrowDown } from "lucide-react"
@@ -62,6 +63,7 @@ type Action =
   | { type: "setJobEnded"; ended: boolean }
   | { type: "setAborted"; aborted: boolean }
   | { type: "setPhase"; data: PhaseTrackerData | null }
+  | { type: "setProgress"; progress: ProgressInfo | null }
   | { type: "addHeartbeat"; entry: HeartbeatEntry }
 
 interface State {
@@ -72,6 +74,7 @@ interface State {
   jobEnded: boolean
   currentAssistantId: number | null
   phase: PhaseTrackerData | null
+  progress: ProgressInfo | null
   heartbeats: HeartbeatEntry[]
 }
 
@@ -185,7 +188,7 @@ function reducer(state: State, action: Action): State {
       return { ...state, messages: [...state.messages, msg] }
     }
     case "clear":
-      return { messages: [], streaming: false, aborted: false, draft: null, jobEnded: false, currentAssistantId: null, phase: null, heartbeats: [] }
+      return { messages: [], streaming: false, aborted: false, draft: null, jobEnded: false, currentAssistantId: null, phase: null, progress: null, heartbeats: [] }
     case "setStreaming":
       return { ...state, streaming: action.streaming }
     case "toggleCollapse":
@@ -210,6 +213,8 @@ function reducer(state: State, action: Action): State {
       }
     case "setPhase":
       return { ...state, phase: action.data }
+    case "setProgress":
+      return { ...state, progress: action.progress }
     case "addHeartbeat":
       return { ...state, heartbeats: [...state.heartbeats.slice(-29), action.entry] }
   }
@@ -259,6 +264,7 @@ export const AgentChat = forwardRef<AgentChatHandle, AgentChatProps>(function Ag
     jobEnded: false,
     currentAssistantId: null,
     phase: null,
+    progress: null,
     heartbeats: [],
   })
   const [input, setInput] = useState("")
@@ -315,8 +321,11 @@ export const AgentChat = forwardRef<AgentChatHandle, AgentChatProps>(function Ag
       dispatch({ type: "addUser", text })
       dispatch({ type: "setStreaming", streaming: true })
       dispatch({ type: "setJobEnded", ended: false })
-      onSend(text).catch(() => {
+      onSend(text).catch((e: unknown) => {
+        const msg = (e as Error)?.message ?? String(e ?? "未知错误")
         dispatch({ type: "setStreaming", streaming: false })
+        dispatch({ type: "addAssistantBlock", kind: "error", content: `请求失败: ${msg}` })
+        toast({ title: "Agent 调用失败", description: msg, variant: "destructive" })
       })
     },
     addUserMessage: (text: string) => {
@@ -420,6 +429,9 @@ export const AgentChat = forwardRef<AgentChatHandle, AgentChatProps>(function Ag
     if (event === "progress") {
       const d = raw as { phase?: string; message?: string; step?: number; total?: number; subtype?: string; done?: boolean; failed?: boolean; elapsedMs?: number }
       onProgress?.(d)
+      if (d.step != null && d.total != null) {
+        dispatch({ type: "setProgress", progress: { step: d.step, total: d.total, label: d.message ?? d.phase } })
+      }
       dispatch({
         type: "addAssistantBlock",
         kind: "thinking",
@@ -693,6 +705,7 @@ export const AgentChat = forwardRef<AgentChatHandle, AgentChatProps>(function Ag
       <PhaseTracker
         data={state.phase}
         heartbeats={state.heartbeats}
+        progress={state.progress}
         className="shrink-0"
       />
 
@@ -740,18 +753,25 @@ export const AgentChat = forwardRef<AgentChatHandle, AgentChatProps>(function Ag
             </div>
           ))}
 
-          {/* 草案确认/放弃按钮 */}
+          {/* 草案确认/放弃按钮（含内容预览） */}
           {state.draft && state.jobEnded && onConfirmDraft && (
-            <div className="flex gap-2 justify-center">
-              <Button size="sm" variant="default" onClick={() => onConfirmDraft(state.draft!)}>
-                <Check className="w-3.5 h-3.5 mr-1" /> 确认修改
-              </Button>
-              <Button size="sm" variant="outline" onClick={() => {
-                dispatch({ type: "setDraft", draft: null })
-                onDiscardDraft?.(state.draft!)
-              }}>
-                <X className="w-3.5 h-3.5 mr-1" /> 放弃修改
-              </Button>
+            <div className="border rounded-lg p-4 bg-muted/30">
+              <p className="font-medium text-sm mb-2">AI 已生成新内容，是否替换当前内容？</p>
+              <div className="max-h-40 overflow-y-auto text-xs text-muted-foreground mb-3 border rounded p-2 bg-background">
+                {state.draft.content.slice(0, 500)}
+                {state.draft.content.length > 500 && "…"}
+              </div>
+              <div className="flex gap-2 justify-center">
+                <Button size="sm" variant="default" onClick={() => onConfirmDraft(state.draft!)}>
+                  <Check className="w-3.5 h-3.5 mr-1" /> 确认替换
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => {
+                  dispatch({ type: "setDraft", draft: null })
+                  onDiscardDraft?.(state.draft!)
+                }}>
+                  <X className="w-3.5 h-3.5 mr-1" /> 放弃
+                </Button>
+              </div>
             </div>
           )}
 

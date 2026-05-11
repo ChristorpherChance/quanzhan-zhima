@@ -76,7 +76,9 @@ async function autoLockArtifact(projectId: string, type: string) {
         data: { locked: true, lockedAt: new Date() },
       })
     }
-  } catch { /* 静默失败 */ }
+  } catch (e) {
+    console.error("[design-agent] autoLockArtifact failed:", (e as Error)?.message ?? e)
+  }
 }
 
 function getOutputExt(subtype: string): string {

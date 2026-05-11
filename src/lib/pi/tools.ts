@@ -1,5 +1,6 @@
 import fs from "node:fs/promises"
 import path from "node:path"
+import { execSync } from "node:child_process"
 import type { ToolDefinition, ExtensionContext } from "@mariozechner/pi-coding-agent"
 import type { AgentToolResult, AgentToolUpdateCallback } from "@mariozechner/pi-agent-core"
 import { Type, type Static } from "@mariozechner/pi-ai"
@@ -31,6 +32,11 @@ const WorkspaceListParams = Type.Object({
 
 const UiTemplatePackParams = Type.Object({
   pageType: Type.String({ description: "Page type: dashboard, list, detail, settings, modal, toast, skeleton, form" }),
+})
+
+const WorkspaceExecParams = Type.Object({
+  command: Type.String({ description: "Shell command to run inside the workspace directory" }),
+  timeoutMs: Type.Optional(Type.Number({ description: "Timeout in ms (default: 300000 = 5 min)" })),
 })
 
 // ── Build options ─────────────────────────────────────────────────
@@ -257,5 +263,47 @@ export function buildPiCustomTools(
     },
   }
 
-  return [readArtifactTool, workspaceWriteTool, workspaceListTool, uiTemplatePackTool]
+  // ── Tool: workspace_exec (bash) ────────────────────────────────
+  const workspaceExecTool: ToolDefinition<typeof WorkspaceExecParams> = {
+    name: "workspace_exec",
+    label: "Workspace Exec",
+    description:
+      "Execute a shell command inside the workspace directory. Use for pnpm install, pnpm build, npm test, etc. The command runs with workspaceDir as cwd. Output is truncated to last 8000 chars.",
+    parameters: WorkspaceExecParams,
+    execute: async (
+      _toolCallId: string,
+      params: Static<typeof WorkspaceExecParams>,
+      signal: AbortSignal | undefined,
+      _onUpdate: AgentToolUpdateCallback | undefined,
+      _ctx: ExtensionContext,
+    ): Promise<AgentToolResult<undefined>> => {
+      try {
+        const timeoutMs = params.timeoutMs ?? 300_000
+        // Guard: allow only safe-ish commands (pnpm, npm, node, npx, ls, cat, wc)
+        const safePrefixes = ["pnpm", "npm", "node", "npx", "ls", "cat", "wc", "echo", "mkdir", "cp", "mv", "rm", "find", "grep", "sort", "head", "tail", "wc", "git", "tsc"]
+        const firstWord = params.command.trim().split(/\s+/)[0]
+        if (!safePrefixes.includes(firstWord)) {
+          return toolErr(`workspace_exec 拒绝：命令前缀 "${firstWord}" 不在允许列表中。允许: ${safePrefixes.join(", ")}`)
+        }
+        if (signal?.aborted) return toolErr("workspace_exec: aborted")
+        const output = execSync(params.command, {
+          cwd: workspaceDir,
+          timeout: timeoutMs,
+          encoding: "utf-8",
+          maxBuffer: 1024 * 1024,
+          stdio: "pipe",
+        })
+        const truncated = output.length > 8000 ? output.slice(-8000) + "\n...(truncated)" : output
+        log("pi", `workspace_exec: ${params.command} → ${output.length} chars`)
+        return ok(truncated || "(no output)")
+      } catch (e: unknown) {
+        const err = e as { stdout?: Buffer; stderr?: Buffer; message?: string }
+        const out = [err.stdout?.toString() ?? "", err.stderr?.toString() ?? ""].filter(Boolean).join("\n")
+        const truncated = out.length > 8000 ? out.slice(-8000) + "\n...(truncated)" : out
+        return toolErr(`workspace_exec: ${err.message ?? String(e)}\n${truncated}`)
+      }
+    },
+  }
+
+  return [readArtifactTool, workspaceWriteTool, workspaceListTool, uiTemplatePackTool, workspaceExecTool]
 }

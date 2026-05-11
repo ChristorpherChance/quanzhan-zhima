@@ -34,3 +34,15 @@ export function buildDevUserPrompt(extra?: string): string {
     "请按系统提示开始构建项目。先输出 PLAN.md，再按计划写文件。"
   )
 }
+
+/**
+ * Build system prompt for direct LLM code generation (non-Pi fallback).
+ * Same context as Pi mode but formatted for chat completion.
+ */
+export async function buildLLMDevPrompt(projectId: string): Promise<string> {
+  const basePrompt = await buildDevSystemPrompt(projectId)
+  const { loadAgentConfig } = await import("@/agents/registry")
+  const { RED_LINES_BLOCK } = await import("./_red-lines")
+  const systemPrompt = RED_LINES_BLOCK + "\n\n" + basePrompt
+  return systemPrompt
+}

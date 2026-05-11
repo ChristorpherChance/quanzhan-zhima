@@ -27,8 +27,8 @@ export const POST = withErrorBoundary(async (
     const outputPath = path.join(tmpDir, "converted.md")
     await fs.writeFile(inputPath, buffer)
     try {
-      const { execSync } = await import("node:child_process")
-      execSync(`pandoc "${inputPath}" -t markdown -o "${outputPath}"`, { timeout: 30000 })
+      const { execFileSync } = await import("node:child_process")
+      execFileSync("pandoc", [inputPath, "-t", "markdown", "-o", outputPath], { timeout: 30000 })
       content = await fs.readFile(outputPath, "utf-8")
     } catch {
       // pandoc 不可用时，对 .docx 尝试简单提取

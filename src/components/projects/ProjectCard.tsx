@@ -52,10 +52,13 @@ export function ProjectCard({ id, name, oneLiner, currentStage, seedType }: Proj
         return
       }
       toast({ title: "项目已删除" })
+      setDeleting(false)
+      setDialogOpen(false)
       router.refresh()
     } catch (e: unknown) {
       toast({ title: "删除请求失败", description: (e as Error)?.message ?? "未知错误", variant: "destructive" })
       setDeleting(false)
+      setDialogOpen(false)
     }
   }, [id, router])
 

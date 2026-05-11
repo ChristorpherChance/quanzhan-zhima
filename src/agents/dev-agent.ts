@@ -2,13 +2,15 @@ import { prisma } from "@/lib/db/prisma"
 import { paths } from "@/config/paths"
 import { log } from "@/lib/log"
 import { J } from "@/lib/db/json"
-import { PORTS } from "@/config/ports"
 import type { AgentRunCtx } from "@/agents/types"
 import { runPiSession } from "@/lib/pi/session"
+import { piSessionPool } from "@/lib/pi/session-manager"
 import { buildDevSystemPrompt, buildDevUserPrompt } from "@/agents/prompts/dev"
 import { reopenFromGate } from "@/lib/hitl/gates"
 import { loadAgentConfig, buildSystemPrompt } from "@/agents/registry"
 import { WORKSPACE_WRITE_DENY } from "@/lib/pi/tools"
+import { generateViaLLM } from "@/agents/llm-code-gen"
+import { generateSmartTemplate } from "@/agents/smart-template"
 import fs from "node:fs/promises"
 import { execSync } from "node:child_process"
 import path from "node:path"
@@ -33,9 +35,12 @@ export async function runDev(ctx: AgentRunCtx, instruction?: string): Promise<vo
   // 预检: 检查是否配置了 API key
   const hasApiKey = !!process.env.DEEPSEEK_API_KEY
   if (!hasApiKey) {
-    ctx.send("log", { line: "⚠ 未配置 DEEPSEEK_API_KEY，跳过 Pi 会话，进入 fallback" })
-    await fallbackTemplateBuild(ctx, workspaceDir)
-    ctx.send("result", { workspaceDir })
+    ctx.send("log", { line: "⚠ 未配置 DEEPSEEK_API_KEY，跳过 Pi 会话，进入 LLM 直连 / 模板兜底" })
+    let fallbackFiles = await generateViaLLM(ctx, ctx.projectId, workspaceDir)
+    if (fallbackFiles < 1) {
+      fallbackFiles = await generateSmartTemplate(ctx, ctx.projectId, workspaceDir)
+    }
+    ctx.send("result", { workspaceDir, filesCount: fallbackFiles })
     return
   }
 
@@ -54,7 +59,12 @@ export async function runDev(ctx: AgentRunCtx, instruction?: string): Promise<vo
   let tokenOut = 0
   let piOk = false
 
+  // ── 四级降级链 ─────────────────────────────────────────────────
+  let filesCount = 0
+
+  // Level 1: Pi 编码代理（15min, 含 reload + bash 工具）
   try {
+    ctx.send("log", { line: "--- 第一级：Pi 编码代理 ---" })
     const r = await runPiSession({
       projectId: project.id,
       workspaceDir,
@@ -62,7 +72,7 @@ export async function runDev(ctx: AgentRunCtx, instruction?: string): Promise<vo
       provider: devCfg.provider as "deepseek" | "anthropic" | "kimi" | "xiaomi" | "openai",
       modelId: devCfg.modelId,
       timeoutMs: devCfg.timeoutMs,
-      systemPromptOverride: systemPrompt, // J3: 注入完整上下文
+      systemPromptOverride: systemPrompt,
       onEvent: (e) => {
         switch (e.type) {
           case "tool_start":
@@ -89,19 +99,60 @@ export async function runDev(ctx: AgentRunCtx, instruction?: string): Promise<vo
       },
     })
     piOk = r.ok
-    if (!r.ok) {
-      ctx.send("log", { line: "Pi 失败，进入 fallback：直接 chat 拉模板。" })
-      await fallbackTemplateBuild(ctx, workspaceDir)
+    if (piOk) {
+      try { filesCount = (await fs.readdir(workspaceDir)).length } catch { /* ignore */ }
+      ctx.send("log", { line: `Pi 完成，产出 ${filesCount} 文件` })
+    } else {
+      ctx.send("log", { line: `Pi 失败: ${r.error ?? "未知错误"}` })
     }
   } catch (e: unknown) {
-    ctx.send("log", { line: `Pi 异常: ${String((e as Error)?.message ?? e)}，进入 fallback` })
-    await fallbackTemplateBuild(ctx, workspaceDir)
+    ctx.send("log", { line: `Pi 异常: ${String((e as Error)?.message ?? e)}` })
+    piOk = false
   }
 
-  // J3.3: 构建自检 — 仅当 Pi 成功时执行
+  // Level 2: Pi followUp 续写（文件数 < 5 时）
+  if (piOk && filesCount < 5) {
+    ctx.send("log", { line: `--- 第二级：Pi followUp 续写（当前仅 ${filesCount} 文件）---` })
+    ctx.setPhase("thinking", "Pi followUp 续写")
+    try {
+      await piSessionPool.followUp(ctx.projectId, "请继续生成剩余文件，确保完整实现 PRD 中所有功能需求。")
+      await new Promise((r) => setTimeout(r, 5000)) // 给 followUp 时间
+      filesCount = (await fs.readdir(workspaceDir)).length
+      ctx.send("log", { line: `followUp 完成，现有 ${filesCount} 文件` })
+    } catch (e: unknown) {
+      ctx.send("log", { line: `followUp 异常: ${(e as Error)?.message ?? e}` })
+    }
+  }
+
+  // Level 3: LLM 直连生成（Pi 完全失败 或 文件数仍 < 1）
+  if (!piOk || filesCount < 1) {
+    ctx.send("log", { line: `--- 第三级：LLM 直连生成 ---` })
+    const llmCount = await generateViaLLM(ctx, ctx.projectId, workspaceDir)
+    if (llmCount > 0) {
+      piOk = true
+      filesCount = Math.max(filesCount, llmCount)
+    }
+  }
+
+  // Level 4: 智能模板兜底（LLM 也失败）
+  if (!piOk || filesCount < 1) {
+    ctx.send("log", { line: "--- 第四级：智能模板兜底 ---" })
+    const tmplCount = await generateSmartTemplate(ctx, ctx.projectId, workspaceDir)
+    if (tmplCount > 0) {
+      piOk = true
+      filesCount = tmplCount
+    }
+  }
+
+  // 重新统计文件数（如果尚未正确统计）
+  if (filesCount === 0) {
+    try { filesCount = (await fs.readdir(workspaceDir)).length } catch { /* ignore */ }
+  }
+
+  // J3.3: 构建自检 — 仅当有足够文件时执行
   let builtOk = false
   let buildLogPath: string | undefined
-  if (piOk) {
+  if (piOk && filesCount >= 1) {
     ctx.setPhase("reviewing", "构建自检")
     ctx.send("log", { line: "--- 构建自检 ---" })
 
@@ -118,7 +169,6 @@ export async function runDev(ctx: AgentRunCtx, instruction?: string): Promise<vo
       ctx.send("log", { line: build.ok ? "✓ build" : `✗ build:\n${build.out.slice(-1500)}` })
     }
 
-    // J2.3: 写 build.log
     await fs.writeFile(`${workspaceDir}/build.log`, buildLog, "utf-8").catch(() => {})
     buildLogPath = `${workspaceDir}/build.log`
   }
@@ -151,8 +201,6 @@ export async function runDev(ctx: AgentRunCtx, instruction?: string): Promise<vo
     where: { projectId: ctx.projectId, type: "code" },
     orderBy: { version: "desc" },
   })
-  let filesCount = 0
-  try { filesCount = (await fs.readdir(workspaceDir)).length } catch { /* ignore */ }
   const meta = { entry: "index.html", filesCount, builtOk, coverage, buildLogPath, selfReview: selfReviewTotal > 0 ? { pass: selfReviewPass, total: selfReviewTotal } : null }
 
   if (existing && !existing.locked) {
@@ -200,51 +248,6 @@ function execIn(cwd: string, cmd: string, ms = 5 * 60_000): { ok: boolean; out: 
     return {
       ok: false,
       out: ((e as any)?.stdout?.toString?.() ?? "") + ((e as any)?.stderr?.toString?.() ?? ""),
-    }
-  }
-}
-
-const MINIMAL_SERVER_JS = `const http = require("http")
-const PORT = process.env.PORT || ${PORTS.app}
-const server = http.createServer((req, res) => {
-  res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" })
-  res.end(\`<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>AI 生成的应用</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%)}.card{background:#fff;border-radius:16px;padding:40px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,0.3);max-width:500px;margin:20px}h1{color:#333;margin-bottom:16px}p{color:#666;line-height:1.6}.status{margin-top:24px;padding:10px 20px;background:#e8f5e9;color:#2e7d32;border-radius:8px;font-size:14px}</style></head><body><div class="card"><h1>🚀 应用已启动</h1><p>这是一个由 AI 生成的骨架应用。沙箱环境已就绪。</p><div class="status">✓ 沙箱运行中 · 端口 \${PORT}</div></div></body></html>\`)
-})
-server.listen(PORT, () => console.log(\`Server running on http://localhost:\${PORT}\`))`
-
-async function fallbackTemplateBuild(ctx: AgentRunCtx, workspaceDir: string): Promise<void> {
-  const skeletonDir = paths.workspace("_skeleton")
-  try {
-    await copyDir(skeletonDir, workspaceDir)
-    ctx.send("log", { line: "fallback: 骨架模板已复制" })
-  } catch {
-    ctx.send("log", { line: "fallback: 无骨架模板，动态生成最小项目" })
-    try {
-      await fs.writeFile(`${workspaceDir}/package.json`, JSON.stringify({
-        name: "ai-generated-app",
-        version: "1.0.0",
-        private: true,
-        scripts: { dev: "node server.js" },
-      }, null, 2), "utf-8")
-      await fs.writeFile(`${workspaceDir}/server.js`, MINIMAL_SERVER_JS, "utf-8")
-      ctx.send("log", { line: "fallback: 最小项目已生成" })
-    } catch (e: unknown) {
-      ctx.send("error", { code: "E_FALLBACK_FAILED", message: `fallback 失败: ${(e as Error)?.message ?? e}` })
-    }
-  }
-  ctx.send("log", { line: "fallback 完成" })
-}
-
-async function copyDir(src: string, dest: string) {
-  await fs.mkdir(dest, { recursive: true })
-  const entries = await fs.readdir(src, { withFileTypes: true })
-  for (const e of entries) {
-    const sp = `${src}/${e.name}`
-    const dp = `${dest}/${e.name}`
-    if (e.isDirectory()) {
-      await copyDir(sp, dp)
-    } else {
-      await fs.copyFile(sp, dp)
     }
   }
 }

@@ -35,6 +35,16 @@ const jobEventTargets = new Map<string, EventTarget>()
 // Phase 状态追踪: jobId -> PhaseState
 const jobPhases = new Map<string, PhaseState>()
 
+const MAX_JOB_CACHE = 100
+
+function pruneMap<K, V>(map: Map<K, V>, maxSize: number) {
+  if (map.size > maxSize) {
+    const keys = [...map.keys()]
+    const toDelete = keys.slice(0, map.size - maxSize)
+    toDelete.forEach((k) => map.delete(k))
+  }
+}
+
 export function getJobEvents(jobId: string): JobEvent[] {
   return jobEvents.get(jobId) ?? []
 }
@@ -64,7 +74,10 @@ export async function startJob(opts: StartJobOpts) {
 
   const jobId = job.id
 
-  // 初始化事件缓冲区
+  // 初始化事件缓冲区（带上限保护）
+  pruneMap(jobEvents, MAX_JOB_CACHE)
+  pruneMap(jobEventTargets, MAX_JOB_CACHE)
+  pruneMap(jobPhases, MAX_JOB_CACHE)
   if (!jobEvents.has(jobId)) {
     jobEvents.set(jobId, [])
   }
@@ -101,7 +114,9 @@ export async function startJob(opts: StartJobOpts) {
       target.dispatchEvent(new CustomEvent("job-event", { detail: entry }))
     }
     // 异步更新 Job.meta（不阻塞主流程）
-    prisma.job.update({ where: { id: jobId }, data: { meta: JSON.stringify(payload) } }).catch(() => {})
+    prisma.job.update({ where: { id: jobId }, data: { meta: JSON.stringify(payload) } }).catch((e) => {
+      console.error("[orchestrator] job.update failed:", (e as Error)?.message ?? e)
+    })
   }
 
   // 发射初始 queued 事件
@@ -137,7 +152,7 @@ export async function startJob(opts: StartJobOpts) {
     },
   }
 
-  // 异步执行 run
+  // 异步执行 run（外层 try/catch 确保异常时清理 Map 条目）
   const executionPromise = (async () => {
     try {
       log("agent", `orchestrator:run-start job=${jobId}`)
@@ -166,7 +181,7 @@ export async function startJob(opts: StartJobOpts) {
       const msg = String((e as Error)?.message ?? e)
       log("agent", `orchestrator:run-fail job=${jobId} error=${msg}`)
 
-      pushPhase("error", msg.slice(0, 100))
+      pushPhase("error", msg.length > 500 ? msg.slice(0, 500) + "..." : msg)
 
       // 发送错误事件（如果还没有被发送）
       ctx.send("error", { code: "E_JOB_FAILED", message: msg })
@@ -181,7 +196,7 @@ export async function startJob(opts: StartJobOpts) {
           errorMsg: msg,
           endedAt: new Date(),
           costTokens: phaseState.tokenIn + phaseState.tokenOut,
-          meta: JSON.stringify({ phase: "error", label: msg.slice(0, 100), tokenIn: phaseState.tokenIn, tokenOut: phaseState.tokenOut, elapsedMs: elapsed() }),
+          meta: JSON.stringify({ phase: "error", label: msg.length > 500 ? msg.slice(0, 500) + "..." : msg, tokenIn: phaseState.tokenIn, tokenOut: phaseState.tokenOut, elapsedMs: elapsed() }),
         },
       })
 

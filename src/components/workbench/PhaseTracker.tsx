@@ -27,9 +27,16 @@ interface HeartbeatEntry {
   summary: string
 }
 
+export interface ProgressInfo {
+  step: number
+  total: number
+  label?: string
+}
+
 interface PhaseTrackerProps {
   data: PhaseTrackerData | null
   heartbeats?: HeartbeatEntry[]
+  progress?: ProgressInfo | null
   className?: string
 }
 
@@ -52,7 +59,7 @@ const PHASE_ORDER: Record<string, number> = {
   aborted: -1,
 }
 
-export function PhaseTracker({ data, heartbeats = [], className }: PhaseTrackerProps) {
+export function PhaseTracker({ data, heartbeats = [], progress, className }: PhaseTrackerProps) {
   const [expanded, setExpanded] = useState(false)
   const expandedRef = useRef(expanded)
   expandedRef.current = expanded
@@ -171,6 +178,22 @@ export function PhaseTracker({ data, heartbeats = [], className }: PhaseTrackerP
           </span>
         </div>
       </div>
+
+      {/* 进度条（当有 step/total 信息时） */}
+      {progress && (
+        <div className="px-3 py-1 border-b">
+          <div className="flex justify-between text-[10px] text-muted-foreground mb-0.5">
+            <span>{progress.label ?? "进度"}</span>
+            <span>{progress.step}/{progress.total}</span>
+          </div>
+          <div className="w-full bg-muted rounded-full h-1">
+            <div
+              className="bg-primary h-1 rounded-full transition-all duration-300"
+              style={{ width: `${(progress.step / progress.total) * 100}%` }}
+            />
+          </div>
+        </div>
+      )}
 
       {/* 子标签 */}
       <div className="px-3 py-0.5 text-[10px] text-muted-foreground truncate">

@@ -85,7 +85,7 @@ const PROVIDER_LLM_KEY: Record<string, string> = {
 export async function runPiSession(
   opts: PiRunOptions,
 ): Promise<{ ok: boolean; sessionFile?: string; error?: string }> {
-  const timeoutMs = opts.timeoutMs ?? 180_000
+  const timeoutMs = opts.timeoutMs ?? 900_000
   const provider = opts.provider ?? "deepseek"
 
   // ── 1. Ensure workspaceDir exists ──────────────────────────────
@@ -146,7 +146,11 @@ export async function runPiSession(
     systemPrompt: opts.systemPromptOverride,
   })
 
+  // ── 6.5 Reload resource loader (CRITICAL: loads systemPrompt) ─
+  await resourceLoader.reload()
+
   // ── 7. Create agent session ────────────────────────────────────
+  const abortController = new AbortController()
   let result: CreateAgentSessionResult
   try {
     result = await createAgentSession({
@@ -177,6 +181,7 @@ export async function runPiSession(
       if (settled) return
       settled = true
       session.abort().catch(() => {})
+      abortController.abort()
       reject(new Error(`Pi session timed out after ${timeoutMs}ms`))
     }, timeoutMs)
 

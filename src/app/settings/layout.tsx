@@ -6,11 +6,11 @@ import { cn } from "@/lib/utils"
 import { Cpu, Bot, Gauge, Container, Download } from "lucide-react"
 
 const NAV_ITEMS = [
-  { href: "/settings/llm", label: "LLM 提供商", icon: Cpu },
-  { href: "/settings/agents", label: "Agent 配置", icon: Bot },
-  { href: "/settings/hitl", label: "HITL 模式", icon: Gauge },
-  { href: "/settings/sandbox", label: "沙箱 & 工具", icon: Container },
-  { href: "/settings/export", label: "数据导出", icon: Download },
+  { href: "/settings/llm", label: "LLM 提供商", icon: Cpu, ready: true },
+  { href: "/settings/agents", label: "Agent 配置", icon: Bot, ready: true },
+  { href: "/settings/hitl", label: "HITL 模式", icon: Gauge, ready: false },
+  { href: "/settings/sandbox", label: "沙箱 & 工具", icon: Container, ready: false },
+  { href: "/settings/export", label: "数据导出", icon: Download, ready: false },
 ]
 
 export default function SettingsLayout({ children }: { children: React.ReactNode }) {
@@ -23,7 +23,7 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
         <div className="px-4 pb-3 mb-2 border-b">
           <h2 className="text-sm font-semibold">设置</h2>
         </div>
-        {NAV_ITEMS.map((item) => {
+        {NAV_ITEMS.filter((item) => item.ready).map((item) => {
           const active = pathname.startsWith(item.href)
           return (
             <Link

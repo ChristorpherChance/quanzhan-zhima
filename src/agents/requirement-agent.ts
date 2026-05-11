@@ -31,7 +31,9 @@ async function appendRequirements(projectId: string, entry: string) {
     try { existing = await fs.readFile(filePath, "utf-8") } catch { /* 文件不存在 */ }
     if (!existing) existing = "# 需求记录\n\n"
     await fs.writeFile(filePath, existing + line, "utf-8")
-  } catch { /* 静默失败 */ }
+  } catch (e) {
+    console.error("[requirement-agent] appendRequirements failed:", (e as Error)?.message ?? e)
+  }
 }
 
 async function upsertArtifact(
@@ -79,7 +81,9 @@ async function autoLockArtifact(projectId: string, type: string) {
         data: { locked: true, lockedAt: new Date() },
       })
     }
-  } catch { /* 静默失败 */ }
+  } catch (e) {
+    console.error("[requirement-agent] autoLockArtifact failed:", (e as Error)?.message ?? e)
+  }
 }
 
 async function loadUploadedDocs(projectId: string): Promise<string> {

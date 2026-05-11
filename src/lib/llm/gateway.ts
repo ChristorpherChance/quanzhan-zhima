@@ -244,6 +244,9 @@ export async function* stream(
           "gateway",
           `stream ${key} 第${attempt}次重试: ${lastErr?.message ?? ""}`,
         )
+        // 指数退避：第1次重试等1s，第2次等2s
+        const delay = Math.pow(2, attempt - 1) * 1000
+        await new Promise((r) => setTimeout(r, delay))
       }
     }
 

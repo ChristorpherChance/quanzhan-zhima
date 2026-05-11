@@ -187,6 +187,8 @@ export function EnhancedInput({
       {/* 输入框 + 发送 */}
       <div className="flex gap-2">
         <Input
+          id="agent-input"
+          name="prompt"
           value={value}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={handleKeyDown}

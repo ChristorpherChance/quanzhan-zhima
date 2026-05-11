@@ -103,6 +103,8 @@ class PiSessionPool {
       systemPrompt: opts.systemPromptOverride,
     })
 
+    await resourceLoader.reload()
+
     const result: CreateAgentSessionResult = await createAgentSession({
       cwd: opts.workspaceDir,
       authStorage: registry.authStorage,

@@ -110,6 +110,10 @@ export default function DevPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ instruction: text }),
       })
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}))
+        throw new Error((body as { error?: string })?.error ?? `HTTP ${r.status}`)
+      }
       const { data } = await r.json()
       setJobId(data.jobId)
     } catch (e: unknown) {
@@ -188,11 +192,11 @@ export default function DevPage() {
                   {stage === "generating" ? "代码生成中..." : stage === "sandbox-starting" ? "沙箱启动中..." : "运行中"}
                 </Badge>
               )}
-              <Button size="sm" onClick={handleOneClick} disabled={loading} variant="default">
+              <Button size="sm" onClick={handleOneClick} disabled={loading} variant="default" title="仅生成代码到工作区，不启动沙箱">
                 <Wand2 className="w-3.5 h-3.5 mr-1" />
                 一键生成
               </Button>
-              <Button size="sm" onClick={handleRun} disabled={loading || stage !== "idle"}>
+              <Button size="sm" onClick={handleRun} disabled={loading || stage !== "idle"} title="生成代码并自动启动沙箱环境预览">
                 {stage === "generating" ? "生成中..." : stage === "sandbox-starting" ? "启动中..." : "一键 Run"}
               </Button>
               <Button variant="outline" size="sm" onClick={handleStop} disabled={!sandboxUrl}>
