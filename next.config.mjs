@@ -5,6 +5,9 @@ const nextConfig = {
       '@mariozechner/pi-coding-agent',
       '@mariozechner/pi-agent-core',
       '@mariozechner/pi-ai',
+      'puppeteer',
+      '@prisma/client',
+      'prisma',
     ],
   },
 };

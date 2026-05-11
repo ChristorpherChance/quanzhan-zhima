@@ -176,6 +176,20 @@ export default function DesignPage() {
         if (next[currentStep] !== "locked") next[currentStep] = "draft"
         return next
       })
+      // 单步生成完成后,主动拉最新 artifact 覆盖 contents/previewHtml(fix: P0-2)
+      const s = DESIGN_STEPS[currentStep]
+      if (s) {
+        fetch(`/api/projects/${pid}/artifacts/${s.artifactType}`)
+          .then((r) => r.json())
+          .then(({ data }) => {
+            if (data?.content) {
+              setContents((prev) => ({ ...prev, [s.key]: data.content }))
+              setArtifactVersions((prev) => ({ ...prev, [s.key]: data.version ?? 1 }))
+              if (s.key === "ui") setPreviewHtml(data.content)
+            }
+          })
+          .catch(() => {})
+      }
     }
   }, [currentStep, pid, designAllSteps])
 

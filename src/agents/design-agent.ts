@@ -8,7 +8,7 @@ import { J } from "@/lib/db/json"
 import type { AgentRunCtx } from "@/agents/types"
 import { DESIGN_SYSTEM, UI_SHELL_PROMPT, UI_PAGE_PROMPT } from "@/agents/prompts/design"
 import { RED_LINES_BLOCK } from "@/agents/prompts/_red-lines"
-import { stripMetaTalk } from "@/agents/utils/strip-meta"
+import { stripMetaTalk, extractHtml, stripCodeFences } from "@/agents/utils/strip-meta"
 import { buildSystemPrompt, loadAgentConfig } from "@/agents/registry"
 import { reopenFromGate } from "@/lib/hitl/gates"
 import { runPiSession, type PiSessionEvent } from "@/lib/pi/session"
@@ -218,36 +218,62 @@ async function generateUi(ctx: AgentRunCtx, projectId: string): Promise<string> 
       ctx.send("progress", { phase: "design-ui-stream", subPhase: "ui-shell", delta, cumulativeBytes })
     },
   )
+  // 去掉 LLM 包装的 ```html / ``` 代码块栅栏(fix: markdown 污染)
+  shell = stripCodeFences(shell)
 
-  // 2. 6 页面
-  const pageBlocks: string[] = []
-  for (const p of UI_PAGES) {
-    ctx.send("progress", { phase: `design-ui-${p}`, message: `生成页面: ${p}` })
-    const tmpl = UI_TEMPLATES[p] ?? UI_TEMPLATES.list ?? ""
-    const userMsg = [
-      `PRD:\n${prdContent.slice(0, 8000)}`,
-      `上一轮已生成 shell（设计令牌 + 全局 store + 路由）：\n${shell.slice(0, 4000)}\n...(截断)`,
-      `ui_template_pack(${p}) 模板：\n${tmpl}`,
-      `请生成 ${p} 页面，遵循上述规则。`,
-    ].join("\n\n")
-    const block = await streamOnceWithContinuation(
-      ctx, `ui-${p}`,
-      UI_PAGE_PROMPT(p),
-      userMsg,
-      new RegExp(`<!--\\s*END:ui-${p}\\s*-->`),
-      5,
-      (delta, cumulativeBytes) => {
-        ctx.send("progress", { phase: "design-ui-stream", subPhase: `ui-${p}`, delta, cumulativeBytes })
-      },
-    )
-    pageBlocks.push(block)
+  // 2. 6 页面 — 全部并发 (CONCURRENCY=6,一次跑完所有 page),从串行 7×t 改为 shell + max(t),预计省 70-85% 时间
+  const CONCURRENCY = 6
+  const pageBlocks: string[] = new Array(UI_PAGES.length)
+  const failures: string[] = []
+  const buildTask = (p: typeof UI_PAGES[number], idx: number) => async () => {
+    try {
+      ctx.send("progress", { phase: `design-ui-${p}`, message: `生成页面: ${p}` })
+      const tmpl = UI_TEMPLATES[p] ?? UI_TEMPLATES.list ?? ""
+      const userMsg = [
+        `PRD:\n${prdContent.slice(0, 8000)}`,
+        `上一轮已生成 shell（设计令牌 + 全局 store + 路由）：\n${shell.slice(0, 4000)}\n...(截断)`,
+        `ui_template_pack(${p}) 模板：\n${tmpl}`,
+        `请生成 ${p} 页面，遵循上述规则。`,
+      ].join("\n\n")
+      const raw = await streamOnceWithContinuation(
+        ctx, `ui-${p}`,
+        UI_PAGE_PROMPT(p),
+        userMsg,
+        new RegExp(`<!--\\s*END:ui-${p}\\s*-->`),
+        5,
+        (delta, cumulativeBytes) => {
+          ctx.send("progress", { phase: "design-ui-stream", subPhase: `ui-${p}`, delta, cumulativeBytes })
+        },
+      )
+      // 去掉 LLM 包装的 ```html / ``` 代码块栅栏(fix: markdown 污染)
+      pageBlocks[idx] = stripCodeFences(raw)
+    } catch (e) {
+      const err = String((e as Error)?.message ?? e)
+      failures.push(`${p}: ${err}`)
+      pageBlocks[idx] = `<!-- PAGE:${p} (生成失败: ${err}) -->\n<div id="page-${p}" x-show="currentPage==='${p}'" class="p-8 text-center text-red-500">页面 ${p} 生成失败</div>\n<!-- /PAGE:${p} -->\n<!-- END:ui-${p} -->`
+      ctx.send("progress", { phase: `design-ui-${p}-failed`, message: `页面 ${p} 失败: ${err}` })
+    }
+  }
+  // 按并发批次执行(CONCURRENCY=6 即一次跑完全部)
+  for (let i = 0; i < UI_PAGES.length; i += CONCURRENCY) {
+    const batch = UI_PAGES.slice(i, i + CONCURRENCY).map((p, k) => buildTask(p, i + k)())
+    await Promise.all(batch)
+  }
+  // 全部失败才抛错;部分失败仍拼装(用户能看到哪些页面失败)
+  if (failures.length === UI_PAGES.length) {
+    throw new Error(`所有 UI 页面生成失败: ${failures.join("; ")}`)
   }
 
-  // 3. 拼装
-  let assembled = shell.replace(
-    '<main id="page-root"></main>',
-    `<main id="page-root">\n${pageBlocks.join("\n\n")}\n</main>`,
-  )
+  // 3. 拼装 — 用正则匹配 <main id="page-root" ...>...</main> 整段,
+  // shell LLM 输出常带 class 属性 + 占位 div,字面匹配会失败导致 page 内容丢弃(fix)
+  const mainRegex = /<main\s+id=["']page-root["'][^>]*>[\s\S]*?<\/main>/i
+  const newMain = `<main id="page-root" class="max-w-7xl mx-auto p-4 md:p-6">\n${pageBlocks.join("\n\n")}\n</main>`
+  let assembled = mainRegex.test(shell)
+    ? shell.replace(mainRegex, newMain)
+    // 兜底:shell 没有 page-root,直接在 </body> 前注入
+    : shell.includes("</body>")
+      ? shell.replace("</body>", `${newMain}\n</body>`)
+      : shell + "\n" + newMain
 
   // 4. 自检 + 补全（最多 2 轮）
   for (let round = 0; round < 2; round++) {
@@ -358,8 +384,9 @@ export async function generate(
       }
     }
 
-    // 清洗元会话语句
+    // 清洗元会话语句 + UI 子类型额外提取 HTML(fix: markdown 污染)
     content = stripMetaTalk(content)
+    if (subtype === "ui") content = extractHtml(content)
 
     // 写入文件
     ctx.setPhase("writing", `写入 ${subtype} 文件`)
@@ -521,7 +548,7 @@ export async function edit(
     }
 
     content = stripMetaTalk(content)
-
+    if (subtype === "ui") content = extractHtml(content)
     await fs.mkdir(dirname(outputPath), { recursive: true })
     await fs.writeFile(outputPath, content, "utf-8")
 

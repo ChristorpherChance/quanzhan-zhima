@@ -35,7 +35,11 @@ const jobEventTargets = new Map<string, EventTarget>()
 // Phase 状态追踪: jobId -> PhaseState
 const jobPhases = new Map<string, PhaseState>()
 
+// 全局持有 running Promise,避免 V8 GC 孤儿化(fix: P0-1)
+const runningJobs = new Map<string, Promise<void>>()
+
 const MAX_JOB_CACHE = 100
+const MAX_JOB_MS = 60 * 60 * 1000  // 60 分钟超时,僵尸 Job 自动标 failed(UI 原型典型耗时 25-40min,留余量)
 
 function pruneMap<K, V>(map: Map<K, V>, maxSize: number) {
   if (map.size > maxSize) {
@@ -152,6 +156,31 @@ export async function startJob(opts: StartJobOpts) {
     },
   }
 
+  // Watchdog: 30 分钟后强制标 failed,防止 Promise 孤儿化(fix: P0-1)
+  const watchdog = setTimeout(async () => {
+    try {
+      const current = await prisma.job.findUnique({ where: { id: jobId } })
+      if (current?.status === "running") {
+        log("agent", `orchestrator:watchdog-timeout job=${jobId}`)
+        const t = jobEventTargets.get(jobId)
+        if (t) {
+          t.dispatchEvent(new CustomEvent("job-event", {
+            detail: { event: "error", data: { code: "E_JOB_TIMEOUT", message: `Job exceeded ${MAX_JOB_MS}ms (watchdog)` }, ts: new Date().toISOString() }
+          }))
+        }
+        await prisma.job.update({
+          where: { id: jobId },
+          data: {
+            status: "failed",
+            errorMsg: `Job exceeded ${MAX_JOB_MS}ms (watchdog)`,
+            endedAt: new Date(),
+            meta: JSON.stringify({ phase: "error", label: "watchdog timeout", tokenIn: phaseState.tokenIn, tokenOut: phaseState.tokenOut, elapsedMs: elapsed() }),
+          },
+        })
+      }
+    } catch {/* swallow */}
+  }, MAX_JOB_MS)
+
   // 异步执行 run（外层 try/catch 确保异常时清理 Map 条目）
   const executionPromise = (async () => {
     try {
@@ -203,6 +232,8 @@ export async function startJob(opts: StartJobOpts) {
       // 追加变更日志
       void appendChangelog(opts.projectId, `Job ${opts.agentType}/${opts.type} 执行失败: ${msg}`)
     } finally {
+      clearTimeout(watchdog)  // 正常结束清掉 watchdog(fix: P0-1)
+      runningJobs.delete(jobId)  // 释放 Promise 引用
       // Job 完成后延迟清理 EventTarget 和 event buffer（给 SSE 连接时间收尾）
       setTimeout(() => {
         jobEventTargets.delete(jobId)
@@ -212,8 +243,10 @@ export async function startJob(opts: StartJobOpts) {
     }
   })()
 
-  // 返回 Job 记录（不等待执行完成）
-  void executionPromise
+  // 持有 Promise 引用,避免 V8 GC 孤儿化(fix: P0-1)
+  runningJobs.set(jobId, executionPromise)
+
+  // 返回 Job 记录（不等待执行完成,Promise 已被 runningJobs 持有）
   return job
 }
 

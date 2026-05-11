@@ -43,19 +43,22 @@ export async function generateViaLLM(
 
   const systemPrompt = await buildLLMDevPrompt(projectId)
 
-  const userPrompt = `请生成完整应用代码。输出格式严格遵循：
+  const userPrompt = `基于已注入的 PRD 和 4 份设计产物,生成完整应用代码。
 
+# 输出格式(严格)
 ## FILE: path/to/file
 \`\`\`language
 ...完整代码内容...
 \`\`\`
 
-要求：
-- 生成一个完整的 SPA 应用（index.html）
-- 使用 localStorage 存储数据
-- 包含 CRUD 全部功能
-- 使用 Tailwind CSS CDN
-- 代码可直接在浏览器中运行`
+# 必须满足
+- **功能完全对齐 PRD 的 AC**(每条 AC 都要有对应实现),严禁生成 PRD 未提及的功能(如任务管理器、待办清单等通用 demo)
+- 字段名、术语、模块名必须来自 PRD 和设计产物
+- 生成可直接运行的 index.html(单文件 SPA),使用 Tailwind CDN + 原生 JS 或 Alpine.js
+- 用 localStorage 存储数据,包含 PRD 要求的 CRUD/查询/筛选/统计等
+- 包含至少 12 条符合业务场景的 mock 数据(不是 task1/task2 这种 placeholder)
+- **如果使用 Alpine.js 路由,所有 \`x-show\` 元素必须加 \`x-cloak\` 属性,且 head 中必须包含 \`<style>[x-cloak]{display:none!important}</style>\`**(避免页面加载时所有 page 同时显示的 FOUC)
+- 代码直接在浏览器中打开即可运行`
 
   let fullText = ""
   try {
